@@ -20,9 +20,9 @@ img_size = (img_h, img_w)
 num_gpus = 8
 batch_size = 4
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
-num_epochs = 30
-total_iters = num_iters_per_epoch * num_epochs
-
+num_epochs = 24
+num_epochs_single_frame = num_epochs // 6
+total_iters = num_epochs * num_iters_per_epoch
 num_queries = 100
 
 # category configs
@@ -34,7 +34,7 @@ cat2id = {
 num_class = max(list(cat2id.values())) + 1
 
 # bev configs
-roi_size = (60, 30)
+roi_size = (60, 30) # bev range, 60m in x-axis, 30m in y-axis
 bev_h = 50
 bev_w = 100
 pc_range = [-roi_size[0]/2, -roi_size[1]/2, -3, roi_size[0]/2, roi_size[1]/2, 5]
@@ -149,7 +149,12 @@ model = dict(
         different_heads=False,
         predict_refine=False,
         sync_cls_avg_factor=True,
-        streaming_cfg=dict(),
+        streaming_cfg=dict(
+            streaming=True,
+            batch_size=batch_size,
+            topk=int(num_queries*(1/3)),
+            trans_loss_weight=0.1,
+        ),
         transformer=dict(
             type='MapTransformer',
             num_feature_levels=1,
@@ -162,6 +167,7 @@ model = dict(
             decoder=dict(
                 type='MapTransformerDecoder_new',
                 num_layers=6,
+                prop_add_stage=1,
                 return_intermediate=True,
                 transformerlayers=dict(
                     type='MapTransformerLayer',
@@ -204,7 +210,7 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=4.0
+            loss_weight=5.0
         ),
         loss_reg=dict(
             type='LinesL1Loss',
@@ -215,12 +221,19 @@ model = dict(
             type='HungarianLinesAssigner',
                 cost=dict(
                     type='MapQueriesCost',
-                    cls_cost=dict(type='FocalLossCost', weight=4.0),
+                    cls_cost=dict(type='FocalLossCost', weight=5.0),
                     reg_cost=dict(type='LinesL1Cost', weight=50.0, beta=0.01, permute=permute),
                     ),
                 ),
         ),
-    streaming_cfg=dict(),
+    streaming_cfg=dict(
+        streaming_bev=True,
+        batch_size=batch_size,
+        fusion_cfg=dict(
+            type='ConvGRU',
+            out_channels=bev_embed_dims,
+        )
+    ),
     model_name='SingleStage'
 )
 
@@ -267,8 +280,8 @@ test_pipeline = [
 # DO NOT CHANGE
 eval_config = dict(
     type='NuscDataset',
-    data_root='./datasets/nuScenes/v1.0-trainval',
-    ann_file='./datasets/nuScenes/streammapnet/nuscenes_map_infos_val.pkl',
+    data_root='./datasets/nuScenes',
+    ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
     cat2id=cat2id,
@@ -292,40 +305,43 @@ data = dict(
     workers_per_gpu=4,
     train=dict(
         type='NuscDataset',
-        data_root='./datasets/nuScenes/v1.0-trainval',
-        ann_file='./datasets/nuScenes/streammapnet/nuscenes_map_infos_train.pkl',
+        data_root='./datasets/nuScenes',
+        ann_file='./datasets/nuScenes/nuscenes_map_infos_train.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
         pipeline=train_pipeline,
-        seq_split_num=-1,
+        seq_split_num=1,
     ),
     val=dict(
         type='NuscDataset',
-        data_root='./datasets/nuScenes/v1.0-trainval',
-        ann_file='./datasets/nuScenes/streammapnet/nuscenes_map_infos_val.pkl',
+        data_root='./datasets/nuScenes',
+        ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
         pipeline=test_pipeline,
         eval_config=eval_config,
         test_mode=True,
-        seq_split_num=-1,
+        seq_split_num=1,
     ),
     test=dict(
         type='NuscDataset',
-        data_root='./datasets/nuScenes/v1.0-trainval',
-        ann_file='./datasets/nuScenes/streammapnet/nuscenes_map_infos_val.pkl',
+        data_root='./datasets/nuScenes',
+        ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
         pipeline=test_pipeline,
         eval_config=eval_config,
         test_mode=True,
-        seq_split_num=-1,
+        seq_split_num=1,
     ),
     shuffler_sampler=dict(
         type='InfiniteGroupEachSampleInBatchSampler',
+        seq_split_num=2,
+        num_iters_to_seq=num_epochs_single_frame*num_iters_per_epoch,
+        random_drop=0.0
     ),
     nonshuffler_sampler=dict(type='DistributedSampler')
 )
@@ -349,9 +365,9 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=3e-3)
 
-evaluation = dict(interval=num_epochs//6*num_iters_per_epoch)
+evaluation = dict(interval=num_epochs_single_frame*num_iters_per_epoch)
 find_unused_parameters = True #### when use checkpoint, find_unused_parameters must be False
-checkpoint_config = dict(interval=num_epochs//6*num_iters_per_epoch)
+checkpoint_config = dict(interval=num_epochs_single_frame*num_iters_per_epoch)
 
 runner = dict(
     type='IterBasedRunner', max_iters=num_epochs * num_iters_per_epoch)
