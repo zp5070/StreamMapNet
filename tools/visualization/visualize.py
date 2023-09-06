@@ -8,9 +8,11 @@ from IPython import embed
 def parse_args():
     parser = argparse.ArgumentParser(
         description='Visualize groundtruth and results')
-    parser.add_argument('config', help='config file path')
-    parser.add_argument('idx', type=int,
-        help='which scene to visualize')
+    parser.add_argument('--config', help='config file path',
+                        default='plugin/configs/nusc_baseline_480_60x30_30e.py')
+    parser.add_argument('--idx', type=int,
+        help='which scene to visualize',
+        default=1)
     parser.add_argument('--result', 
         default=None,
         help='prediction result to visualize'
@@ -74,7 +76,8 @@ def main():
     scene_dir = os.path.join(args.out_dir, scene_name)
     os.makedirs(scene_dir, exist_ok=True)
     start_idx = scene_name2idx[scene_name][0]
-    results = mmcv.load(args.result)
+    if args.result is not None:
+        results = mmcv.load(args.result)
     for idx in mmcv.track_iter_progress(scene_name2idx[scene_name]):
         
         out_dir = os.path.join(scene_dir, str(idx - start_idx + 1))

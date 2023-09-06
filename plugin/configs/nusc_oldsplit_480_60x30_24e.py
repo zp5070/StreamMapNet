@@ -17,7 +17,7 @@ img_h = 480
 img_w = 800
 img_size = (img_h, img_w)
 
-num_gpus = 8
+num_gpus = 4
 batch_size = 4
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
@@ -30,6 +30,7 @@ cat2id = {
     'ped_crossing': 0,
     'divider': 1,
     'boundary': 2,
+    'centerline': 3
 }
 num_class = max(list(cat2id.values())) + 1
 

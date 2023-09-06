@@ -30,6 +30,7 @@ cat2id = {
     'ped_crossing': 0,
     'divider': 1,
     'boundary': 2,
+    'centerline': 3
 }
 num_class = max(list(cat2id.values())) + 1
 
