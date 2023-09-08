@@ -1,10 +1,11 @@
+import cv2
 import numpy as np
 from mmdet.datasets.builder import PIPELINES
 from shapely.geometry import LineString
 from numpy.typing import NDArray
 from typing import List, Tuple, Union, Dict
 from IPython import embed
-
+from shapely import affinity
 @PIPELINES.register_module(force=True)
 class VectorizeMap(object):
     """Generate vectoized map and put into `semantic_mask` key.
@@ -28,8 +29,19 @@ class VectorizeMap(object):
                  simplify: bool=False, 
                  sample_num: int=-1, 
                  sample_dist: float=-1, 
-                 permute: bool=False
-        ):
+                 permute: bool=False,
+                 aux_seg: dict=dict(
+                    use_aux_seg=False,
+                    ins_seg=False,
+                    bev_seg=False,
+                    pv_seg=False,
+                    seg_classes=1,
+                    feat_down_sample=32,
+                    pv_thickness=1,
+                    bev_thickness=1,
+                    canvas_size=(400, 200) #(w, h)
+                    )):
+
         self.coords_dim = coords_dim
         self.sample_num = sample_num
         self.sample_dist = sample_dist
@@ -37,7 +49,10 @@ class VectorizeMap(object):
         self.normalize = normalize
         self.simplify = simplify
         self.permute = permute
-
+        self.aux_seg = aux_seg
+        self.canvas_size = aux_seg['canvas_size']
+        self.scale_x = self.canvas_size[0] / self.roi_size[0]
+        self.scale_y = self.canvas_size[1] / self.roi_size[1]
         if sample_dist > 0:
             assert sample_num < 0 and not simplify
             self.sample_fn = self.interp_fixed_dist
@@ -81,7 +96,7 @@ class VectorizeMap(object):
                                 for distance in distances]).squeeze()
         
         return sampled_points
-    
+
     def get_vectorized_lines(self, map_geoms: Dict) -> Dict:
         ''' Vectorize map elements. Iterate over the input dict and apply the 
         specified sample funcion.
@@ -98,6 +113,7 @@ class VectorizeMap(object):
             vectors[label] = []
             for geom in geom_list:
                 if geom.geom_type == 'LineString':
+
                     if self.simplify:
                         line = geom.simplify(0.2, preserve_topology=True)
                         line = np.array(line.coords)
@@ -121,7 +137,55 @@ class VectorizeMap(object):
                 else:
                     raise ValueError('map geoms must be either LineString or Polygon!')
         return vectors
-    
+
+    def get_vectorized_lines_and_masks(self, map_geoms: Dict) -> Dict:
+        ''' Vectorize map elements. Iterate over the input dict and apply the 
+        specified sample funcion.
+        
+        Args:
+            line (LineString): line
+        
+        Returns:
+            vectors (array): dict of vectorized map elements.
+        '''
+
+        vectors, instance_masks = {}, {}
+        for label, geom_list in map_geoms.items():
+            vectors[label], instance_masks[label] = [], []
+            for geom in geom_list:
+                if geom.geom_type == 'LineString':
+                    # get vectorized lines
+                    if self.simplify:
+                        line = geom.simplify(0.2, preserve_topology=True)
+                        line = np.array(line.coords)
+                    else:
+                        line = self.sample_fn(geom)
+                    line = line[:, :self.coords_dim]
+
+                    if self.normalize:
+                        line = self.normalize_line(line)
+                    if self.permute:
+                        if label == 3: # centerline label
+                            line = self.permute_line_for_centerline(line)
+                        else:
+                            line = self.permute_line(line)
+                    vectors[label].append(line)
+
+                    # get instance masks
+                    instance_mask = np.zeros((self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
+
+                    self.line_ego_to_mask(geom, instance_mask, color=1,
+                        thickness=self.aux_seg['bev_thickness'])
+                    instance_masks[label].append(instance_mask)
+
+                elif geom.geom_type == 'Polygon':
+                    # polygon objects will not be vectorized
+                    continue
+                
+                else:
+                    raise ValueError('map geoms must be either LineString or Polygon!')
+        return vectors, instance_masks
+
     def normalize_line(self, line: NDArray) -> NDArray:
         ''' Convert points to range (0, 1).
         
@@ -195,10 +259,54 @@ class VectorizeMap(object):
         
         return permute_lines_array
 
+    def line_ego_to_mask(self, 
+                         line_ego: LineString, 
+                         mask: NDArray, 
+                         color: int=1, 
+                         thickness: int=3) -> None:
+        ''' Rasterize a single line to mask.
+        
+        Args:
+            line_ego (LineString): line
+            mask (array): semantic mask to paint on
+            color (int): positive label, default: 1
+            thickness (int): thickness of rasterized lines, default: 3
+        '''
+
+        trans_x = self.canvas_size[0] / 2
+        trans_y = self.canvas_size[1] / 2
+        line_ego = affinity.scale(line_ego, self.scale_x, self.scale_y, origin=(0, 0))
+        line_ego = affinity.affine_transform(line_ego, [1.0, 0.0, 0.0, 1.0, trans_x, trans_y])
+        
+        coords = np.array(list(line_ego.coords), dtype=np.int32)[:, :2]
+        coords = coords.reshape((-1, 2))
+        assert len(coords) >= 2
+        
+        cv2.polylines(mask, np.int32([coords]), False, color=color, thickness=thickness)
+
     def __call__(self, input_dict):
         map_geoms = input_dict['map_geoms']
 
-        input_dict['vectors'] = self.get_vectorized_lines(map_geoms)
+        if self.aux_seg.get('use_aux_seg'):
+            vectors, instance_masks = self.get_vectorized_lines_and_masks(map_geoms)
+            input_dict['vectors'] = vectors
+            if self.aux_seg.get('ins_seg'):
+                input_dict['instance_masks'] = instance_masks
+            if self.aux_seg.get('bev_seg'):
+                semantic_masks = np.zeros((len(instance_masks), self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
+                for label, instance_masks_list in instance_masks.items():
+                    for instance_mask in instance_masks_list:
+                        semantic_masks[label] += instance_mask
+                input_dict['semantic_masks'] = (semantic_mask[None] > 0).astype(np.uint8)
+                # if self.aux_seg.get('seg_classes') == 1:
+                #     semantic_mask = np.zeros((self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
+                #     for label, instance_masks_list in instance_masks.items():
+                #         for instance_mask in instance_masks_list:
+                #             semantic_mask += instance_mask
+                #     input_dict['semantic_masks'] = (semantic_mask[None] > 0).astype(np.uint8)
+
+        else:
+            input_dict['vectors'] = self.get_vectorized_lines(map_geoms)
         return input_dict
 
     def __repr__(self):
@@ -209,5 +317,6 @@ class VectorizeMap(object):
         repr_str += f'roi_size={self.roi_size})'
         repr_str += f'normalize={self.normalize})'
         repr_str += f'coords_dim={self.coords_dim})'
+        repr_str += f'canvas_size={self.canvas_size})'
 
         return repr_str
