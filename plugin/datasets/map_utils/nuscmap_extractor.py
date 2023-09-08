@@ -297,10 +297,11 @@ class NuscMapExtractor(object):
         leaves = [v for v, d in pts_G.out_degree() if d == 0]
         all_paths = []
         for root in roots:
-            for leave in leaves:
-                paths = nx.all_simple_paths(pts_G, root, leave)
-                all_paths.extend(paths)
-
+            paths = nx.all_simple_paths(pts_G, root, leaves)
+            all_paths.extend(paths)
+            # for leave in leaves:
+            #     paths = nx.all_simple_paths(pts_G, root, leave)
+            #     all_paths.extend(paths)
         final_centerline_paths = []
         for path in all_paths:
             merged_line = LineString(path)
