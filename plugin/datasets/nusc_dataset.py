@@ -7,6 +7,7 @@ import mmcv
 from time import time
 from pyquaternion import Quaternion
 import math
+import os
 
 @DATASETS.register_module()
 class NuscDataset(BaseMapDataset):
@@ -42,7 +43,10 @@ class NuscDataset(BaseMapDataset):
         start_time = time()
         ann = mmcv.load(ann_file)
         samples = ann[::self.interval]
-        
+
+        if os.environ.get("DEBUG") is not None:
+            samples = samples[:10]
+
         print(f'collected {len(samples)} samples in {(time() - start_time):.2f}s')
         self.samples = samples
 
