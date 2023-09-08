@@ -1,2 +1,4 @@
 av2
 nuscenes-devkit
+numpy==1.23.5
+setuptools==59.5.0

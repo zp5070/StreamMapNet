@@ -192,4 +192,4 @@ def create_nuscenes_infos_map(root_path,
 if __name__ == '__main__':
     args = parse_args()
 
-    create_nuscenes_infos_map(root_path=args.data_root, version=args.version, new_split=args.newsplit)
+    create_nuscenes_infos_map(root_path=args.data_root, dest_path='datasets', version=args.version, new_split=args.newsplit)

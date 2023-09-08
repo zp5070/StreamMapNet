@@ -9,7 +9,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Visualize groundtruth and results')
     parser.add_argument('--config', help='config file path',
-                        default='plugin/configs/nusc_baseline_480_60x30_30e.py')
+                        default='plugin/configs/nusc_oldsplit_480_60x30_24e_w_centerline.py')
     parser.add_argument('--idx', type=int,
         help='which scene to visualize',
         default=1)

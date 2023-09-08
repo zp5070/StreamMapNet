@@ -108,7 +108,10 @@ class VectorizeMap(object):
                     if self.normalize:
                         line = self.normalize_line(line)
                     if self.permute:
-                        line = self.permute_line(line)
+                        if label == 3: # centerline label
+                            line = self.permute_line_for_centerline(line)
+                        else:
+                            line = self.permute_line(line)
                     vectors[label].append(line)
 
                 elif geom.geom_type == 'Polygon':
@@ -166,14 +169,32 @@ class VectorizeMap(object):
             tmp[:, :-1, :] = permute_lines_array
             tmp[:, -1, :] = permute_lines_array[:, 0, :] # add replicate start end pts
             permute_lines_array = tmp
-
         else:
             # padding
             padding = np.full([permute_num * 2 - 2, num_points, self.coords_dim], padding)
             permute_lines_array = np.concatenate((permute_lines_array, padding), axis=0)
         
         return permute_lines_array
-    
+
+    def permute_line_for_centerline(self, line: np.ndarray, padding=1e5):
+        '''
+        (num_pts, 2) -> (num_permute, num_pts, 2)
+        where num_permute = 2 * (num_pts - 1)
+        '''
+
+        num_points = len(line)
+        permute_num = num_points - 1
+        permute_lines_list = []
+
+        permute_lines_list.append(line)
+        permute_lines_array = np.stack(permute_lines_list, axis=0)
+
+        # padding
+        padding = np.full([permute_num * 2 - 1, num_points, self.coords_dim], padding)
+        permute_lines_array = np.concatenate((permute_lines_array, padding), axis=0)
+        
+        return permute_lines_array
+
     def __call__(self, input_dict):
         map_geoms = input_dict['map_geoms']
 

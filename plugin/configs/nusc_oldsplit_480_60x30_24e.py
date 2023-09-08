@@ -30,7 +30,6 @@ cat2id = {
     'ped_crossing': 0,
     'divider': 1,
     'boundary': 2,
-    'centerline': 3
 }
 num_class = max(list(cat2id.values())) + 1
 
@@ -282,7 +281,7 @@ test_pipeline = [
 eval_config = dict(
     type='NuscDataset',
     data_root='./datasets/nuScenes',
-    ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
+    ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
     meta=meta,
     roi_size=roi_size,
     cat2id=cat2id,
@@ -307,7 +306,7 @@ data = dict(
     train=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/nuScenes/nuscenes_map_infos_train.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_train.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -317,7 +316,7 @@ data = dict(
     val=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -329,7 +328,7 @@ data = dict(
     test=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/nuScenes/nuscenes_map_infos_val.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
