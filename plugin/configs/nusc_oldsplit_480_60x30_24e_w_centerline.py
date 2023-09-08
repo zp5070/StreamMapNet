@@ -23,7 +23,7 @@ num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
 num_epochs_single_frame = num_epochs // 6
 total_iters = num_epochs * num_iters_per_epoch
-num_queries = 100
+num_queries = 150
 
 # category configs
 cat2id = {
