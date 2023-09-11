@@ -17,13 +17,13 @@ img_h = 480
 img_w = 800
 img_size = (img_h, img_w)
 
-num_gpus = 1
-batch_size = 2
+num_gpus = 4
+batch_size = 4
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
 num_epochs_single_frame = num_epochs // 6
 total_iters = num_epochs * num_iters_per_epoch
-num_queries = 100
+num_queries = 150
 
 # category configs
 cat2id = {
@@ -56,7 +56,8 @@ aux_seg_cfg = dict(
     feat_down_sample=32,
     pv_thickness=1,
     bev_thickness=3,
-    canvas_size=(bev_w * 4, bev_h * 4))
+    canvas_size=(400, 200), # (w, h)
+    )
 
 # meta info for submission pkl
 meta = dict(
@@ -233,7 +234,7 @@ model = dict(
         ),
         loss_seg=dict(type='SimpleLoss', 
             pos_weight=4.0,
-            loss_weight=3.0),
+            loss_weight=5.0),
         assigner=dict(
             type='HungarianLinesAssigner',
                 cost=dict(
@@ -391,10 +392,10 @@ runner = dict(
     type='IterBasedRunner', max_iters=num_epochs * num_iters_per_epoch)
 
 log_config = dict(
-    interval=1,
+    interval=100,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
     ])
 
-SyncBN = False
+SyncBN = True

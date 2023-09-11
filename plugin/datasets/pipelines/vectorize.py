@@ -176,6 +176,7 @@ class VectorizeMap(object):
 
                     self.line_ego_to_mask(geom, instance_mask, color=1,
                         thickness=self.aux_seg['bev_thickness'])
+
                     instance_masks[label].append(instance_mask)
 
                 elif geom.geom_type == 'Polygon':
@@ -290,21 +291,24 @@ class VectorizeMap(object):
         if self.aux_seg.get('use_aux_seg'):
             vectors, instance_masks = self.get_vectorized_lines_and_masks(map_geoms)
             input_dict['vectors'] = vectors
+
+            input_dict['instance_masks'] = None
+            input_dict['semantic_masks'] = None
             if self.aux_seg.get('ins_seg'):
                 input_dict['instance_masks'] = instance_masks
             if self.aux_seg.get('bev_seg'):
                 semantic_masks = np.zeros((len(instance_masks), self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
+                merged_semantic_masks = np.zeros((1, self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
                 for label, instance_masks_list in instance_masks.items():
                     for instance_mask in instance_masks_list:
                         semantic_masks[label] += instance_mask
-                input_dict['semantic_masks'] = (semantic_mask[None] > 0).astype(np.uint8)
-                # if self.aux_seg.get('seg_classes') == 1:
-                #     semantic_mask = np.zeros((self.canvas_size[1], self.canvas_size[0]), dtype=np.uint8)
-                #     for label, instance_masks_list in instance_masks.items():
-                #         for instance_mask in instance_masks_list:
-                #             semantic_mask += instance_mask
-                #     input_dict['semantic_masks'] = (semantic_mask[None] > 0).astype(np.uint8)
-
+                    semantic_masks[label] = (semantic_masks[label] > 0).astype(np.uint8)
+                    merged_semantic_masks[0] += semantic_masks[label]
+                merged_semantic_masks = (merged_semantic_masks > 0).astype(np.uint8)
+                if self.aux_seg.get('seg_classes') == 1:
+                    input_dict['semantic_masks'] = merged_semantic_masks
+                else:
+                    input_dict['semantic_masks'] = semantic_masks
         else:
             input_dict['vectors'] = self.get_vectorized_lines(map_geoms)
         return input_dict

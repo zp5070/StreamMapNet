@@ -146,7 +146,8 @@ class StreamMapNet(BaseMapper):
         
         return fused_feats
 
-    def forward_train(self, img, vectors, points=None, img_metas=None, **kwargs):
+    def forward_train(self, img, vectors, \
+                      points=None, img_metas=None, semantic_masks=None, **kwargs):
         '''
         Args:
             img: torch.Tensor of shape [B, N, 3, H, W]
@@ -183,7 +184,8 @@ class StreamMapNet(BaseMapper):
             bev_features=bev_feats, 
             img_metas=img_metas, 
             gts=gts,
-            return_loss=True)
+            return_loss=True,
+            gt_semantic_masks=semantic_masks)
         
         # format loss
         loss = 0
@@ -260,9 +262,9 @@ class StreamMapNet(BaseMapper):
 
         gts = {
             'labels': all_labels_list,
-            'lines': all_lines_list
+            'lines': all_lines_list,
         }
-        
+
         gts = [deepcopy(gts) for _ in range(self.num_decoder_layers)]
 
         return gts, imgs, img_metas, valid_idx, points

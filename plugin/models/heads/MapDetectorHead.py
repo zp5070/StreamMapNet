@@ -35,7 +35,9 @@ class MapDetectorHead(nn.Module):
                  transformer=dict(),
                  loss_cls=dict(),
                  loss_reg=dict(),
-                 assigner=dict()
+                 loss_seg=dict(),
+                 assigner=dict(),
+                 aux_seg=dict(),
                 ):
         super().__init__()
         self.num_queries = num_queries
@@ -47,9 +49,11 @@ class MapDetectorHead(nn.Module):
         self.bev_pos = bev_pos
         self.num_points = num_points
         self.coord_dim = coord_dim
+        self.aux_seg =aux_seg
         
         self.sync_cls_avg_factor = sync_cls_avg_factor
         self.bg_cls_weight = bg_cls_weight
+        self.loss_seg = build_loss(loss_seg)
         
         if streaming_cfg:
             self.streaming_query = streaming_cfg['streaming']
@@ -177,6 +181,19 @@ class MapDetectorHead(nn.Module):
         self.reg_branches = reg_branches
         self.cls_branches = cls_branches
 
+        if self.aux_seg.get('bev_seg'):
+            self.seg_head = nn.Sequential(
+                nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, padding=1, bias=False),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(self.in_channels, self.aux_seg['seg_classes'], kernel_size=1, padding=0)
+            )
+            self.mask_size = self.aux_seg.get('canvas_size')[::-1]
+
+    def up_sample(self, x, tgt_shape=(200, 100)):
+        if tuple(x.shape[-2:]) == tuple(tgt_shape):
+            return x
+        return F.interpolate(x, size=tgt_shape, mode="bilinear", align_corners=True)    
+
     def _prepare_context(self, bev_features):
         """Prepare class label and vertex context."""
         device = bev_features.device
@@ -297,7 +314,7 @@ class MapDetectorHead(nn.Module):
         else:
             return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list
 
-    def forward_train(self, bev_features, img_metas, gts):
+    def forward_train(self, bev_features, img_metas, gts, gt_semantic_masks=None):
         '''
         Args:
             bev_feature (List[Tensor]): shape [B, C, H, W]
@@ -310,6 +327,12 @@ class MapDetectorHead(nn.Module):
                 scores (Tensor):
                     [bs, num_query,]
         '''
+
+        if self.aux_seg['use_aux_seg']:
+            outputs_seg = self.seg_head(bev_features)
+            outputs_seg = self.up_sample(outputs_seg, self.mask_size)
+            loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
+            # loss_dict['bev_seg_loss'] = loss_seg
 
         bev_features = self._prepare_context(bev_features)
 
@@ -324,14 +347,14 @@ class MapDetectorHead(nn.Module):
         if self.streaming_query:
             query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query, is_first_frame_list, trans_loss = \
                 self.propagate(query_embedding, img_metas, return_loss=True)
-            
+
         else:
             init_reference_points = self.reference_points_embed(query_embedding).sigmoid() # (bs, num_q, 2*num_pts)
             init_reference_points = init_reference_points.view(-1, self.num_queries, self.num_points, 2) # (bs, num_q, num_pts, 2)
             prop_query_embedding = None
             prop_ref_pts = None
             is_first_frame_list = [True for i in range(bs)]
-        
+
         assert list(init_reference_points.shape) == [bs, self.num_queries, self.num_points, 2]
         assert list(query_embedding.shape) == [bs, self.num_queries, self.embed_dims]
 
@@ -373,6 +396,8 @@ class MapDetectorHead(nn.Module):
             outputs.append(pred_dict)
         
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
+        if self.aux_seg['use_aux_seg']:
+            loss_dict['bev_seg_loss'] = loss_seg
         if self.streaming_query:
             query_list = []
             ref_pts_list = []
