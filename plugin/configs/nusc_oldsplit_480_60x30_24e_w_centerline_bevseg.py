@@ -50,8 +50,8 @@ simplify = True
 aux_seg_cfg = dict(
     use_aux_seg=True,
     bev_seg=True,
-    pv_seg=True,
-    ins_seg=False,
+    pv_seg=False,
+    ins_seg=True,
     seg_classes=1,
     feat_down_sample=32,
     pv_thickness=1,
@@ -241,6 +241,8 @@ model = dict(
                     type='MapQueriesCost',
                     cls_cost=dict(type='FocalLossCost', weight=5.0),
                     reg_cost=dict(type='LinesL1Cost', weight=50.0, beta=0.01, permute=permute),
+                    mask_cost=dict(type='MaskCost', weight=5.0, ce_weight=1, dice_weight=1, num_points=200 * 100,
+                           use_point_render=True, oversample_ratio=3.0, importance_sample_ratio=0.9)
                     ),
                 ),
         ),

@@ -17,8 +17,8 @@ img_h = 480
 img_w = 800
 img_size = (img_h, img_w)
 
-num_gpus = 1
-batch_size = 2
+num_gpus = 4
+batch_size = 4
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
 num_epochs_single_frame = num_epochs // 6
@@ -394,10 +394,10 @@ runner = dict(
     type='IterBasedRunner', max_iters=num_epochs * num_iters_per_epoch)
 
 log_config = dict(
-    interval=1,
+    interval=100,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
     ])
 
-SyncBN = False
+SyncBN = True

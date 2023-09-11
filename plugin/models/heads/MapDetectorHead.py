@@ -166,20 +166,35 @@ class MapDetectorHead(nn.Module):
         ]
         reg_branch = nn.Sequential(*reg_branch)
 
+        mask_branch = [
+            Linear(self.embed_dims, 2*self.embed_dims),
+            nn.LayerNorm(2*self.embed_dims),
+            nn.ReLU(),
+            Linear(2*self.embed_dims, 2*self.embed_dims),
+            nn.LayerNorm(2*self.embed_dims),
+            nn.ReLU(),
+            Linear(2*self.embed_dims, self.embed_dims),
+        ]
+        mask_branch = nn.Sequential(*mask_branch)
+
         num_layers = self.transformer.decoder.num_layers
         if self.different_heads:
             cls_branches = nn.ModuleList(
                 [copy.deepcopy(cls_branch) for _ in range(num_layers)])
             reg_branches = nn.ModuleList(
                 [copy.deepcopy(reg_branch) for _ in range(num_layers)])
+            mask_branches = nn.ModuleList(
+                [copy.deepcopy(mask_branch) for _ in range(num_layers)])
         else:
             cls_branches = nn.ModuleList(
                 [cls_branch for _ in range(num_layers)])
             reg_branches = nn.ModuleList(
                 [reg_branch for _ in range(num_layers)])
-
-        self.reg_branches = reg_branches
+            mask_branches = nn.ModuleList(
+                [mask_branch for _ in range(num_layers)])
         self.cls_branches = cls_branches
+        self.reg_branches = reg_branches
+        self.mask_branches = mask_branches
 
         if self.aux_seg.get('bev_seg'):
             self.seg_head = nn.Sequential(
@@ -187,7 +202,7 @@ class MapDetectorHead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(self.in_channels, self.aux_seg['seg_classes'], kernel_size=1, padding=0)
             )
-            self.mask_size = self.aux_seg.get('canvas_size')[::-1]
+        self.mask_size = self.aux_seg.get('canvas_size')[::-1]
 
     def up_sample(self, x, tgt_shape=(200, 100)):
         if tuple(x.shape[-2:]) == tuple(tgt_shape):
@@ -328,7 +343,7 @@ class MapDetectorHead(nn.Module):
                     [bs, num_query,]
         '''
 
-        if self.aux_seg['use_aux_seg']:
+        if self.aux_seg['bev_seg']:
             outputs_seg = self.seg_head(bev_features)
             outputs_seg = self.up_sample(outputs_seg, self.mask_size)
             loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
@@ -381,22 +396,28 @@ class MapDetectorHead(nn.Module):
             reg_points = reg_points.view(bs, -1, 2*self.num_points) # (bs, num_q, 2*num_points)
 
             scores = self.cls_branches[i](queries) # (bs, num_q, num_classes)
+            mask_embeds = self.mask_branches[i](queries)
+            ins_masks = torch.einsum("bqc, bchw->bqhw", mask_embeds, bev_features)
+            ins_masks = self.up_sample(ins_masks, self.mask_size)
 
             reg_points_list = []
             scores_list = []
+            ins_masks_list = []
             for i in range(len(scores)):
                 # padding queries should not be output
                 reg_points_list.append(reg_points[i])
                 scores_list.append(scores[i])
+                ins_masks_list.append(ins_masks[i])
 
             pred_dict = {
                 'lines': reg_points_list,
-                'scores': scores_list
+                'scores': scores_list,
+                'masks': ins_masks_list
             }
             outputs.append(pred_dict)
         
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
-        if self.aux_seg['use_aux_seg']:
+        if self.aux_seg['bev_seg']:
             loss_dict['bev_seg_loss'] = loss_seg
         if self.streaming_query:
             query_list = []
@@ -539,8 +560,10 @@ class MapDetectorHead(nn.Module):
     def _get_target_single(self,
                            score_pred,
                            lines_pred,
+                           masks_pred,
                            gt_labels,
                            gt_lines,
+                           gt_masks,
                            gt_bboxes_ignore=None):
         """
             Compute regression and classification targets for one image.
@@ -570,9 +593,13 @@ class MapDetectorHead(nn.Module):
         """
         num_pred_lines = len(lines_pred)
         # assigner and sampler
-        assign_result, gt_permute_idx = self.assigner.assign(preds=dict(lines=lines_pred, scores=score_pred,),
+        assign_result, gt_permute_idx = self.assigner.assign(
+                                             preds=dict(lines=lines_pred,
+                                                        scores=score_pred, 
+                                                        masks=masks_pred),
                                              gts=dict(lines=gt_lines,
-                                                      labels=gt_labels, ),
+                                                      labels=gt_labels,
+                                                      masks=gt_masks),
                                              gt_bboxes_ignore=gt_bboxes_ignore)
         sampling_result = self.sampler.sample(
             assign_result, lines_pred, gt_lines)
@@ -588,7 +615,10 @@ class MapDetectorHead(nn.Module):
 
         lines_target = torch.zeros_like(lines_pred) # (num_q, 2*num_pts)
         lines_weights = torch.zeros_like(lines_pred) # (num_q, 2*num_pts)
-        
+
+        masks_target = torch.zeros_like(masks_pred) # (num_q, mask_h, mask_w)
+        masks_weights = torch.zeros((num_pred_lines)) # (num_q, mask_h, mask_w)
+
         if num_gt > 0:
             if gt_permute_idx is not None: # using permute invariant label
                 # gt_permute_idx: (num_q, num_gt)
@@ -603,15 +633,15 @@ class MapDetectorHead(nn.Module):
             else:
                 lines_target[pos_inds] = sampling_result.pos_gt_bboxes.type(
                     lines_target.dtype) # (num_q, 2*num_pts)
-        
+            masks_target[pos_inds] = gt_masks[pos_gt_inds].type(masks_target.dtype)
         lines_weights[pos_inds] = 1.0 # (num_q, 2*num_pts)
-
+        masks_weights[pos_inds] = 1.0 # (num_q, mask_h, mask_w)
         # normalization
         # n = lines_weights.sum(-1, keepdim=True) # (num_q, 1)
         # lines_weights = lines_weights / n.masked_fill(n == 0, 1) # (num_q, 2*num_pts)
         # [0, ..., 0] for neg ind and [1/npts, ..., 1/npts] for pos ind
 
-        return (labels, label_weights, lines_target, lines_weights,
+        return (labels, label_weights, lines_target, lines_weights, masks_target, masks_weights,
                 pos_inds, neg_inds, pos_gt_inds)
 
     # @force_fp32(apply_to=('preds', 'gts'))
@@ -648,14 +678,17 @@ class MapDetectorHead(nn.Module):
         # format the inputs
         gt_labels = gts['labels']
         gt_lines = gts['lines']
+        gt_masks = gts['masks']
 
         lines_pred = preds['lines']
+        masks_pred = preds['masks']
 
         (labels_list, label_weights_list,
         lines_targets_list, lines_weights_list,
-        pos_inds_list, neg_inds_list,pos_gt_inds_list) = multi_apply(
-            self._get_target_single, preds['scores'], lines_pred,
-            gt_labels, gt_lines, gt_bboxes_ignore=gt_bboxes_ignore_list)
+        masks_targets_list, masks_weights_list,
+        pos_inds_list, neg_inds_list, pos_gt_inds_list) = multi_apply(
+            self._get_target_single, preds['scores'], lines_pred, masks_pred,
+            gt_labels, gt_lines, gt_masks, gt_bboxes_ignore=gt_bboxes_ignore_list)
         
         num_total_pos = sum((inds.numel() for inds in pos_inds_list))
         num_total_neg = sum((inds.numel() for inds in neg_inds_list))
@@ -664,6 +697,9 @@ class MapDetectorHead(nn.Module):
             label_weights=label_weights_list, # list[Tensor(num_q, )], length=bs, all ones
             lines=lines_targets_list, # list[Tensor(num_q, 2*num_pts)], length=bs
             lines_weights=lines_weights_list, # list[Tensor(num_q, 2*num_pts)], length=bs
+            masks=masks_targets_list,
+            masks_weights=masks_weights_list,
+
         )
 
         return new_gts, num_total_pos, num_total_neg, pos_inds_list, pos_gt_inds_list
@@ -737,6 +773,17 @@ class MapDetectorHead(nn.Module):
             cls=loss_cls,
             reg=loss_reg,
         )
+
+        # Mask
+        pred_masks = torch.cat(preds['masks'], dim=0)
+        gt_masks = torch.cat(new_gts['masks'], dim=0).to(pred_masks.device)
+        mask_weights = torch.cat(new_gts['masks_weights'], dim=0).to(pred_masks.device)
+
+        assert len(pred_masks) == len(gt_masks)
+        assert len(gt_masks) == len(mask_weights)
+        loss_mask = (self.assigner.cost.mask_cost(
+            pred_masks, gt_masks, "Loss") * mask_weights).sum() / num_total_pos
+        loss_dict.update(mask=loss_mask)
 
         return loss_dict, pos_inds_list, pos_gt_inds_list, new_gts['lines']
     

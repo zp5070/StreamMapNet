@@ -146,8 +146,14 @@ class StreamMapNet(BaseMapper):
         
         return fused_feats
 
-    def forward_train(self, img, vectors, \
-                      points=None, img_metas=None, semantic_masks=None, **kwargs):
+    def forward_train(self,
+                      img,
+                      vectors,
+                      points=None,
+                      img_metas=None,
+                      semantic_masks=None,
+                      instance_masks=None,
+                      **kwargs):
         '''
         Args:
             img: torch.Tensor of shape [B, N, 3, H, W]
@@ -166,7 +172,7 @@ class StreamMapNet(BaseMapper):
         #  prepare labels and images
 
         gts, img, img_metas, valid_idx, points = self.batch_data(
-            vectors, img, img_metas, img.device, points)
+            vectors, img, img_metas, img.device, points, instance_masks)
         
         bs = img.shape[0]
 
@@ -231,7 +237,7 @@ class StreamMapNet(BaseMapper):
 
         return results_list
 
-    def batch_data(self, vectors, imgs, img_metas, device, points=None):
+    def batch_data(self, vectors, imgs, img_metas, device, points=None, instance_masks=None):
         bs = len(vectors)
         # filter none vector's case
         num_gts = []
@@ -243,6 +249,7 @@ class StreamMapNet(BaseMapper):
         gts = []
         all_labels_list = []
         all_lines_list = []
+        all_masks_list = []
         for idx in range(bs):
             labels = []
             lines = []
@@ -256,13 +263,21 @@ class StreamMapNet(BaseMapper):
                         lines.append(torch.tensor(_line).reshape(-1)) # (40, )
                     else:
                         assert False
-
+            mask_labels = []
+            mask_lines = []
+            for label, _lines in instance_masks[idx].items():
+                for _line in _lines:
+                    mask_labels.append(label)
+                    mask_lines.append(torch.tensor(_line, dtype=float))
+            assert mask_labels == labels
             all_labels_list.append(torch.tensor(labels, dtype=torch.long).to(device))
             all_lines_list.append(torch.stack(lines).float().to(device))
+            all_masks_list.append(torch.stack(mask_lines).float().to(device))
 
         gts = {
             'labels': all_labels_list,
             'lines': all_lines_list,
+            'masks': all_masks_list
         }
 
         gts = [deepcopy(gts) for _ in range(self.num_decoder_layers)]

@@ -62,7 +62,12 @@ class FormatBundleMap(object):
             # vectors may have different sizes
             vectors = results['vectors']
             results['vectors'] = DC(vectors, stack=False, cpu_only=True)
-        
+
+        if 'instance_masks' in results:
+            # vectors may have different sizes
+            instance_masks = results['instance_masks']
+            results['instance_masks'] = DC(instance_masks, stack=False, cpu_only=True)
+
         if 'polys' in results:
             results['polys'] = DC(results['polys'], stack=False, cpu_only=True)
 
