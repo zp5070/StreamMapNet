@@ -55,7 +55,7 @@ aux_seg_cfg = dict(
     seg_classes=1,
     feat_down_sample=32,
     pv_thickness=1,
-    bev_thickness=3,
+    bev_thickness=6,
     canvas_size=(400, 200), # (w, h)
     )
 
