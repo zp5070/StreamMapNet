@@ -167,13 +167,13 @@ class MapDetectorHead(nn.Module):
         reg_branch = nn.Sequential(*reg_branch)
 
         mask_branch = [
-            Linear(self.embed_dims, 2*self.embed_dims),
-            nn.LayerNorm(2*self.embed_dims),
+            Linear(self.embed_dims, self.in_channels),
+            nn.LayerNorm(self.in_channels),
             nn.ReLU(),
-            Linear(2*self.embed_dims, 2*self.embed_dims),
-            nn.LayerNorm(2*self.embed_dims),
+            Linear(self.in_channels, self.in_channels),
+            nn.LayerNorm(self.in_channels),
             nn.ReLU(),
-            Linear(2*self.embed_dims, self.embed_dims),
+            Linear(self.in_channels, self.in_channels),
         ]
         mask_branch = nn.Sequential(*mask_branch)
 
@@ -343,13 +343,9 @@ class MapDetectorHead(nn.Module):
                     [bs, num_query,]
         '''
 
-        if self.aux_seg['bev_seg']:
-            outputs_seg = self.seg_head(bev_features)
-            outputs_seg = self.up_sample(outputs_seg, self.mask_size)
-            loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
-            # loss_dict['bev_seg_loss'] = loss_seg
 
-        bev_features = self._prepare_context(bev_features)
+        input_bev_features = bev_features
+        bev_features = self._prepare_context(input_bev_features)
 
         bs, C, H, W = bev_features.shape
         img_masks = bev_features.new_zeros((bs, H, W))
@@ -397,7 +393,7 @@ class MapDetectorHead(nn.Module):
 
             scores = self.cls_branches[i](queries) # (bs, num_q, num_classes)
             mask_embeds = self.mask_branches[i](queries)
-            ins_masks = torch.einsum("bqc, bchw->bqhw", mask_embeds, bev_features)
+            ins_masks = torch.einsum("bqc, bchw->bqhw", mask_embeds, input_bev_features)
             ins_masks = self.up_sample(ins_masks, self.mask_size)
 
             reg_points_list = []
@@ -418,6 +414,10 @@ class MapDetectorHead(nn.Module):
         
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
         if self.aux_seg['bev_seg']:
+            outputs_seg = self.seg_head(input_bev_features)
+            outputs_seg = self.up_sample(outputs_seg, self.mask_size)
+            loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
+            # loss_dict['bev_seg_loss'] = loss_seg
             loss_dict['bev_seg_loss'] = loss_seg
         if self.streaming_query:
             query_list = []
