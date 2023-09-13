@@ -68,6 +68,15 @@ meta = dict(
     use_external=False,
     output_format='vector')
 
+# lidar configs
+file_client_args = dict(backend='disk')
+grid_config = {
+    'x': [-30.0, -30.0, 0.15], # useless
+    'y': [-15.0, -15.0, 0.15], # useless
+    'z': [-10, 10, 20],        # useless
+    'depth': [1.0, 35.0, 0.5], # useful
+}
+
 # model configs
 bev_embed_dims = 256
 embed_dims = 512
@@ -275,6 +284,13 @@ train_pipeline = [
          change_intrinsics=True,
          ),
     dict(type='Normalize3D', **img_norm_cfg),
+    dict(
+        type='LoadPointsFromFile',
+        coord_type='LIDAR',
+        load_dim=5,
+        use_dim=5,
+        file_client_args=file_client_args),
+    dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
     dict(type='PadMultiViewImages', size_divisor=32),
     dict(type='FormatBundleMap'),
     dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks'], meta_keys=(
@@ -302,7 +318,7 @@ test_pipeline = [
 eval_config = dict(
     type='NuscDataset',
     data_root='./datasets/nuScenes',
-    ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
+    ann_file='./datasets/streammapnet/nuscenes_map_infos_val_w_lidar.pkl',
     meta=meta,
     roi_size=roi_size,
     cat2id=cat2id,
@@ -327,7 +343,7 @@ data = dict(
     train=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/streammapnet/nuscenes_map_infos_train.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_train_w_lidar.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -337,7 +353,7 @@ data = dict(
     val=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_val_w_lidar.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
@@ -349,7 +365,7 @@ data = dict(
     test=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/streammapnet/nuscenes_map_infos_val.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_val_w_lidar.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,

@@ -144,7 +144,7 @@ class ResizeMultiViewImages(object):
     def __call__(self, results:dict):
 
         new_imgs, post_intrinsics, post_ego2imgs = [], [], []
-
+        img_aug_matrix = []
         for img,  cam_intrinsic, ego2img in zip(results['img'], \
                 results['cam_intrinsics'], results['ego2img']):
             if self.scale is not None:
@@ -166,6 +166,7 @@ class ResizeMultiViewImages(object):
                 [0,      scaleH, 0,    0],
                 [0,      0,      1,    0],
                 [0,      0,      0,    1]])
+            img_aug_matrix.append(rot_resize_matrix)
             post_intrinsic = rot_resize_matrix[:3, :3] @ cam_intrinsic
             post_ego2img = rot_resize_matrix @ ego2img
             post_intrinsics.append(post_intrinsic)
@@ -174,9 +175,11 @@ class ResizeMultiViewImages(object):
         results['img'] = new_imgs
         results['img_shape'] = [img.shape for img in new_imgs]
         if self.change_intrinsics:
+            results['lidar2img'] = [img_aug_matrix[i] @ l2i for i, l2i in enumerate(results['lidar2img'])]
             results.update({
                 'cam_intrinsics': post_intrinsics,
                 'ego2img': post_ego2imgs,
+                'img_aug_matrix': img_aug_matrix
             })
 
         return results
