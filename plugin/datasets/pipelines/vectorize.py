@@ -281,6 +281,8 @@ class VectorizeMap(object):
         
         coords = np.array(list(line_ego.coords), dtype=np.int32)[:, :2]
         coords = coords.reshape((-1, 2))
+        # coords = np.flip(coords, axis=1)
+        coords[:, 1:2] = self.canvas_size[1] - coords[:, 1:2]
         assert len(coords) >= 2
         
         cv2.polylines(mask, np.int32([coords]), False, color=color, thickness=thickness)

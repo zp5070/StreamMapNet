@@ -394,7 +394,7 @@ class MapDetectorHead(nn.Module):
             scores = self.cls_branches[i](queries) # (bs, num_q, num_classes)
             mask_embeds = self.mask_branches[i](queries)
             ins_masks = torch.einsum("bqc, bchw->bqhw", mask_embeds, input_bev_features)
-            ins_masks = self.up_sample(ins_masks, self.mask_size)
+            # ins_masks = self.up_sample(ins_masks, self.mask_size)
 
             reg_points_list = []
             scores_list = []
@@ -415,7 +415,7 @@ class MapDetectorHead(nn.Module):
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
         if self.aux_seg['bev_seg']:
             outputs_seg = self.seg_head(input_bev_features)
-            outputs_seg = self.up_sample(outputs_seg, self.mask_size)
+            # outputs_seg = self.up_sample(outputs_seg, self.mask_size)
             loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
             # loss_dict['bev_seg_loss'] = loss_seg
             loss_dict['bev_seg_loss'] = loss_seg

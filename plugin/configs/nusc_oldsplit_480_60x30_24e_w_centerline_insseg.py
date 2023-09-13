@@ -55,8 +55,8 @@ aux_seg_cfg = dict(
     seg_classes=1,
     feat_down_sample=32,
     pv_thickness=1,
-    bev_thickness=6,
-    canvas_size=(400, 200), # (w, h)
+    bev_thickness=2,
+    canvas_size=(bev_w, bev_h), # (w, h)
     )
 
 # meta info for submission pkl
@@ -241,7 +241,7 @@ model = dict(
                     type='MapQueriesCost',
                     cls_cost=dict(type='FocalLossCost', weight=5.0),
                     reg_cost=dict(type='LinesL1Cost', weight=50.0, beta=0.01, permute=permute),
-                    mask_cost=dict(type='MaskCost', weight=5.0, ce_weight=1, dice_weight=1, num_points=200 * 100,
+                    mask_cost=dict(type='MaskCost', weight=5.0, ce_weight=1, dice_weight=1, num_points=25 * 50,
                            use_point_render=True, oversample_ratio=3.0, importance_sample_ratio=0.9)
                     ),
                 ),
