@@ -132,25 +132,25 @@ class CustomPointToMultiViewDepth(object):
         depth_map = torch.stack(depth_map_list)
 
         ##################################################################
-        i = 0
-        import os
-        import cv2
-        from PIL import Image
-        for image_id in range(imgs.shape[0]):
-            i+=1
-            image = imgs[image_id]
-            gt_depth_image = depth_map[image_id].numpy()
+        # i = 0
+        # import os
+        # import cv2
+        # from PIL import Image
+        # for image_id in range(imgs.shape[0]):
+        #     i+=1
+        #     image = imgs[image_id]
+        #     gt_depth_image = depth_map[image_id].numpy()
             
-            gt_depth_image = np.expand_dims(gt_depth_image,2).repeat(3,2)
+        #     gt_depth_image = np.expand_dims(gt_depth_image,2).repeat(3,2)
             
-            #apply colormap on deoth image(image must be converted to 8-bit per pixel first)
-            im_color=cv2.applyColorMap(cv2.convertScaleAbs(gt_depth_image,alpha=15),cv2.COLORMAP_JET)
-            #convert to mat png
-            image[gt_depth_image>0] = im_color[gt_depth_image>0]
-            im=Image.fromarray(np.uint8(image))
-            #save image
-            os.makedirs("visualize_1", exist_ok=True)
-            im.save('visualize_1/visualize_{}.png'.format(i))
+        #     #apply colormap on depth image(image must be converted to 8-bit per pixel first)
+        #     im_color=cv2.applyColorMap(cv2.convertScaleAbs(gt_depth_image,alpha=15),cv2.COLORMAP_JET)
+        #     #convert to mat png
+        #     image[gt_depth_image>0] = im_color[gt_depth_image>0]
+        #     im=Image.fromarray(np.uint8(image))
+        #     #save image
+        #     os.makedirs("visualize_1", exist_ok=True)
+        #     im.save('visualize_1/visualize_{}.png'.format(i))
         #################################################################
 
         results['gt_depth'] = depth_map

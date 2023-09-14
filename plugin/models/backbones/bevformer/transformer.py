@@ -38,6 +38,7 @@ class PerceptionTransformer(BaseModule):
                  encoder=None,
                  embed_dims=256,
                  use_cams_embeds=True,
+                 feat_down_sample_indice=-1,
                  **kwargs):
         super().__init__(**kwargs)
         self.encoder = build_transformer_layer_sequence(encoder)
@@ -48,6 +49,7 @@ class PerceptionTransformer(BaseModule):
         self.fp16_enabled = False
 
         self.use_cams_embeds = use_cams_embeds
+        self.feat_down_sample_indice = feat_down_sample_indice
 
         self.init_layers()
         
@@ -74,6 +76,27 @@ class PerceptionTransformer(BaseModule):
         normal_(self.cams_embeds)
         # xavier_init(self.reference_points, distribution='uniform', bias=0.)
 
+    def lss_bev_encode(
+            self,
+            mlvl_feats,
+            prev_bev=None,
+            **kwargs):
+        # import ipdb;ipdb.set_trace()
+        # assert len(mlvl_feats) == 1, 'Currently we only use last single level feat in LSS'
+        # import ipdb;ipdb.set_trace()
+        images = mlvl_feats[self.feat_down_sample_indice]
+        img_metas = kwargs['img_metas']
+        encoder_outputdict = self.encoder(images,img_metas)
+        bev_embed = encoder_outputdict['bev']
+        depth = encoder_outputdict['depth']
+        bs, c, _,_ = bev_embed.shape
+        bev_embed = bev_embed.view(bs,c,-1).permute(0,2,1).contiguous()
+        ret_dict = dict(
+            bev=bev_embed,
+            depth=depth
+        )
+        return ret_dict
+
     # @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'prev_bev', 'bev_pos'))
     def get_bev_features(
             self,
@@ -88,49 +111,54 @@ class PerceptionTransformer(BaseModule):
         obtain bev features.
         """
 
-        bs = mlvl_feats[0].size(0)
-        bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1)
-        bev_pos = bev_pos.flatten(2).permute(2, 0, 1)
+        # bs = mlvl_feats[0].size(0)
+        # bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1)
+        # bev_pos = bev_pos.flatten(2).permute(2, 0, 1)
 
-        shift = bev_queries.new_tensor((0,0))[None].repeat(bs,1)
+        # shift = bev_queries.new_tensor((0,0))[None].repeat(bs,1)
 
-        feat_flatten = []
-        spatial_shapes = []
-        for lvl, feat in enumerate(mlvl_feats):
-            bs, num_cam, c, h, w = feat.shape
-            spatial_shape = (h, w)
-            feat = feat.flatten(3).permute(1, 0, 3, 2)
-            if self.use_cams_embeds:
-                feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
-            feat = feat + self.level_embeds[None,
-                                            None, lvl:lvl + 1, :].to(feat.dtype)
-            spatial_shapes.append(spatial_shape)
-            feat_flatten.append(feat)
+        # feat_flatten = []
+        # spatial_shapes = []
+        # for lvl, feat in enumerate(mlvl_feats):
+        #     bs, num_cam, c, h, w = feat.shape
+        #     spatial_shape = (h, w)
+        #     feat = feat.flatten(3).permute(1, 0, 3, 2)
+        #     if self.use_cams_embeds:
+        #         feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
+        #     feat = feat + self.level_embeds[None,
+        #                                     None, lvl:lvl + 1, :].to(feat.dtype)
+        #     spatial_shapes.append(spatial_shape)
+        #     feat_flatten.append(feat)
 
-        feat_flatten = torch.cat(feat_flatten, 2)
+        # feat_flatten = torch.cat(feat_flatten, 2)
         
-        spatial_shapes = torch.as_tensor(
-            spatial_shapes, dtype=torch.long, device=bev_pos.device)
-        level_start_index = torch.cat((spatial_shapes.new_zeros(
-            (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        # spatial_shapes = torch.as_tensor(
+        #     spatial_shapes, dtype=torch.long, device=bev_pos.device)
+        # level_start_index = torch.cat((spatial_shapes.new_zeros(
+        #     (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
 
-        feat_flatten = feat_flatten.permute(
-            0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
+        # feat_flatten = feat_flatten.permute(
+        #     0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
 
-        bev_embed = self.encoder(
-            bev_queries,
-            feat_flatten,
-            feat_flatten,
-            bev_h=bev_h,
-            bev_w=bev_w,
-            bev_pos=bev_pos,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
+        # bev_embed = self.encoder(
+        #     bev_queries,
+        #     feat_flatten,
+        #     feat_flatten,
+        #     bev_h=bev_h,
+        #     bev_w=bev_w,
+        #     bev_pos=bev_pos,
+        #     spatial_shapes=spatial_shapes,
+        #     level_start_index=level_start_index,
+        #     prev_bev=prev_bev,
+        #     shift=shift,
+        #     **kwargs
+        # )
+        ret_dict = self.lss_bev_encode(
+            mlvl_feats,
             prev_bev=prev_bev,
-            shift=shift,
-            **kwargs
-        )
-
+            **kwargs)
+        bev_embed = ret_dict['bev']
+        depth = ret_dict['depth']
         return bev_embed
 
     @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'object_query_embed', 'prev_bev', 'bev_pos'))

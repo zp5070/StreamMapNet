@@ -10,10 +10,13 @@ plugin = True
 plugin_dir = 'plugin/'
 
 # img configs
-img_norm_cfg = dict(
-    mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
+# img_norm_cfg = dict(
+#     mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
 
-img_h = 480
+img_norm_cfg = dict(
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+
+img_h = 450
 img_w = 800
 img_size = (img_h, img_w)
 
@@ -68,14 +71,6 @@ meta = dict(
     use_external=False,
     output_format='vector')
 
-# lidar configs
-file_client_args = dict(backend='disk')
-grid_config = {
-    'x': [-30.0, -30.0, 0.15], # useless
-    'y': [-15.0, -15.0, 0.15], # useless
-    'z': [-10, 10, 20],        # useless
-    'depth': [1.0, 35.0, 0.5], # useful
-}
 
 # model configs
 bev_embed_dims = 256
@@ -85,6 +80,19 @@ norm_cfg = dict(type='BN2d')
 num_class = max(list(cat2id.values()))+1
 num_points = 20
 permute = True
+
+# lidar configs
+file_client_args = dict(backend='disk')
+grid_config = {
+    'x': [-30.0, -30.0, 0.15], # useless
+    'y': [-15.0, -15.0, 0.15], # useless
+    'z': [-10, 10, 20],        # useless
+    'depth': [1.0, 35.0, 0.5], # useful
+}
+point_cloud_range = [-15.0, -30.0,-10.0, 15.0, 30.0, 10.0]
+_dim_ = 256
+voxel_size = [0.15, 0.15, 20.0]
+dbound=[1.0, 35.0, 0.5]
 
 model = dict(
     type='StreamMapNet',
@@ -123,35 +131,46 @@ model = dict(
         transformer=dict(
             type='PerceptionTransformer',
             embed_dims=bev_embed_dims,
+            # encoder=dict(
+            #     type='BEVFormerEncoder',
+            #     num_layers=1,
+            #     pc_range=pc_range,
+            #     num_points_in_pillar=4,
+            #     return_intermediate=False,
+            #     transformerlayers=dict(
+            #         type='BEVFormerLayer',
+            #         attn_cfgs=[
+            #             dict(
+            #                 type='TemporalSelfAttention',
+            #                 embed_dims=bev_embed_dims,
+            #                 num_levels=1),
+            #             dict(
+            #                 type='SpatialCrossAttention',
+            #                 deformable_attention=dict(
+            #                     type='MSDeformableAttention3D',
+            #                     embed_dims=bev_embed_dims,
+            #                     num_points=8,
+            #                     num_levels=num_feat_levels),
+            #                 embed_dims=bev_embed_dims,
+            #             )
+                    # ],
+                    # feedforward_channels=bev_embed_dims*2,
+                    # ffn_dropout=0.1,
+                    # operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
+                    #                 'ffn', 'norm')
+                # )
             encoder=dict(
-                type='BEVFormerEncoder',
-                num_layers=1,
-                pc_range=pc_range,
-                num_points_in_pillar=4,
-                return_intermediate=False,
-                transformerlayers=dict(
-                    type='BEVFormerLayer',
-                    attn_cfgs=[
-                        dict(
-                            type='TemporalSelfAttention',
-                            embed_dims=bev_embed_dims,
-                            num_levels=1),
-                        dict(
-                            type='SpatialCrossAttention',
-                            deformable_attention=dict(
-                                type='MSDeformableAttention3D',
-                                embed_dims=bev_embed_dims,
-                                num_points=8,
-                                num_levels=num_feat_levels),
-                            embed_dims=bev_embed_dims,
-                        )
-                    ],
-                    feedforward_channels=bev_embed_dims*2,
-                    ffn_dropout=0.1,
-                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
-                                    'ffn', 'norm')
-                )
-            ),
+                type='LSSTransform',
+                in_channels=_dim_,
+                out_channels=_dim_,
+                feat_down_sample=32,
+                pc_range=point_cloud_range,
+                voxel_size=voxel_size,
+                dbound=dbound,
+                downsample=2,
+                loss_depth_weight=3.0,
+                depthnet_cfg=dict(use_dcn=False, with_cp=False, aspp_mid_channels=96),
+                grid_config=grid_config,)
         ),
         positional_encoding=dict(
             type='LearnedPositionalEncoding',
@@ -306,6 +325,13 @@ test_pipeline = [
          change_intrinsics=True,
          ),
     dict(type='Normalize3D', **img_norm_cfg),
+    dict(
+        type='LoadPointsFromFile',
+        coord_type='LIDAR',
+        load_dim=5,
+        use_dim=5,
+        file_client_args=file_client_args),
+    dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
     dict(type='PadMultiViewImages', size_divisor=32),
     dict(type='FormatBundleMap'),
     dict(type='Collect3D', keys=['img'], meta_keys=(
