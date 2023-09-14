@@ -30,7 +30,7 @@ class NuscDataset(BaseMapDataset):
         super().__init__(**kwargs)
         self.map_extractor = NuscMapExtractor(data_root, self.roi_size)
         self.renderer = Renderer(self.cat2id, self.roi_size, 'nusc')
-        self.with_lidar = False
+        self.with_lidar = True
     
     def load_annotations(self, ann_file):
         """Load annotations from ann_file.
@@ -47,7 +47,7 @@ class NuscDataset(BaseMapDataset):
         samples = ann[::self.interval]
 
         if os.environ.get("DEBUG") is not None:
-            samples = samples[:10]
+            samples = samples[1270:1271]
 
         print(f'collected {len(samples)} samples in {(time() - start_time):.2f}s')
         self.samples = samples
