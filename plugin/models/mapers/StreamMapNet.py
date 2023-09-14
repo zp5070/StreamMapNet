@@ -13,6 +13,7 @@ from .base_mapper import BaseMapper, MAPPERS
 from copy import deepcopy
 from ..utils.memory_buffer import StreamTensorMemory
 from mmcv.cnn.utils import constant_init, kaiming_init
+from mmcv.utils import TORCH_VERSION, digit_version
 
 @MAPPERS.register_module()
 class StreamMapNet(BaseMapper):
@@ -153,6 +154,7 @@ class StreamMapNet(BaseMapper):
                       img_metas=None,
                       semantic_masks=None,
                       instance_masks=None,
+                      gt_depth=None,
                       **kwargs):
         '''
         Args:
@@ -190,9 +192,16 @@ class StreamMapNet(BaseMapper):
             bev_features=bev_feats, 
             img_metas=img_metas, 
             gts=gts,
-            return_loss=True,
-            gt_semantic_masks=semantic_masks)
-        
+            return_loss=True)
+
+        # calculate depth loss
+        if gt_depth is not None:
+            depth = ret_dict['depth']
+            loss_depth = self.backbone.transformer.encoder.get_depth_loss(gt_depth, depth)
+            if digit_version(TORCH_VERSION) >= digit_version('1.8'):
+                loss_depth = torch.nan_to_num(loss_depth)
+            loss_dict.update(loss_depth=loss_depth)
+
         # format loss
         loss = 0
         for name, var in loss_dict.items():
@@ -218,7 +227,8 @@ class StreamMapNet(BaseMapper):
         for img_meta in img_metas:
             tokens.append(img_meta['token'])
 
-        _bev_feats = self.backbone(img, img_metas, points=points)
+        result_dict = self.backbone(img, img_metas, points=points)
+        _bev_feats = result_dict['bev']
         img_shape = [_bev_feats.shape[2:] for i in range(_bev_feats.shape[0])]
 
         if self.streaming_bev:

@@ -193,7 +193,7 @@ class BEVFormerBackbone(nn.Module):
             )
         
         outs = ret_dict['bev']
-        outs = outs.unflatten(1,(self.bev_h,self.bev_w)).permute(0,3,1,2).contiguous()
+        # outs = outs.unflatten(1,(self.bev_h,self.bev_w)).permute(0,3,1,2).contiguous()
         
         if self.upsample:
             outs = self.up(outs)

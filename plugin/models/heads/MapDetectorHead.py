@@ -329,7 +329,7 @@ class MapDetectorHead(nn.Module):
         else:
             return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list
 
-    def forward_train(self, bev_features, img_metas, gts, gt_semantic_masks=None):
+    def forward_train(self, bev_features, img_metas, gts):
         '''
         Args:
             bev_feature (List[Tensor]): shape [B, C, H, W]
@@ -413,12 +413,7 @@ class MapDetectorHead(nn.Module):
             outputs.append(pred_dict)
         
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
-        if self.aux_seg['bev_seg']:
-            outputs_seg = self.seg_head(input_bev_features)
-            # outputs_seg = self.up_sample(outputs_seg, self.mask_size)
-            loss_seg = self.loss_seg(outputs_seg, gt_semantic_masks.float())
-            # loss_dict['bev_seg_loss'] = loss_seg
-            loss_dict['bev_seg_loss'] = loss_seg
+
         if self.streaming_query:
             query_list = []
             ref_pts_list = []

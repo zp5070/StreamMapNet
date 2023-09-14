@@ -84,14 +84,14 @@ permute = True
 # lidar configs
 file_client_args = dict(backend='disk')
 grid_config = {
-    'x': [-30.0, -30.0, 0.6], # useless
-    'y': [-15.0, -15.0, 0.6], # useless
+    'x': [-30.0, -30.0, 0.3], # useless
+    'y': [-15.0, -15.0, 0.3], # useless
     'z': [-10, 10, 20],        # useless
     'depth': [1.0, 35.0, 0.5], # useful
 }
 point_cloud_range = [-15.0, -30.0,-10.0, 15.0, 30.0, 10.0]
 _dim_ = 256
-voxel_size = [0.6, 0.6, 20.0]
+voxel_size = [0.3, 0.3, 20.0]
 dbound=[1.0, 35.0, 0.5]
 
 model = dict(
@@ -312,7 +312,7 @@ train_pipeline = [
     dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
     dict(type='PadMultiViewImages', size_divisor=32),
     dict(type='FormatBundleMap'),
-    dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks'], meta_keys=(
+    dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks', 'gt_depth'], meta_keys=(
         'token', 'ego2img', 'sample_idx', 'ego2global_translation',
         'ego2global_rotation', 'img_shape', 'scene_name', 'lidar2img',
         'camera2ego', 'camera_intrinsics', 'img_aug_matrix', 'lidar2ego',
