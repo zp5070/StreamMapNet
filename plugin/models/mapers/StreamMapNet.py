@@ -177,8 +177,8 @@ class StreamMapNet(BaseMapper):
         bs = img.shape[0]
 
         # Backbone
-        _bev_feats = self.backbone(img, img_metas=img_metas, points=points)
-        
+        ret_dict = self.backbone(img, img_metas=img_metas, points=points)
+        _bev_feats = ret_dict['bev']
         if self.streaming_bev:
             self.bev_memory.train()
             _bev_feats = self.update_bev_feature(_bev_feats, img_metas)

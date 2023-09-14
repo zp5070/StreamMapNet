@@ -89,8 +89,8 @@ class PerceptionTransformer(BaseModule):
         encoder_outputdict = self.encoder(images,img_metas)
         bev_embed = encoder_outputdict['bev']
         depth = encoder_outputdict['depth']
-        bs, c, _,_ = bev_embed.shape
-        bev_embed = bev_embed.view(bs,c,-1).permute(0,2,1).contiguous()
+        # bs, c, _,_ = bev_embed.shape
+        # bev_embed = bev_embed.view(bs,c,-1).permute(0,2,1).contiguous()
         ret_dict = dict(
             bev=bev_embed,
             depth=depth
@@ -157,9 +157,9 @@ class PerceptionTransformer(BaseModule):
             mlvl_feats,
             prev_bev=prev_bev,
             **kwargs)
-        bev_embed = ret_dict['bev']
-        depth = ret_dict['depth']
-        return bev_embed
+        # bev_embed = ret_dict['bev']
+        # depth = ret_dict['depth']
+        return ret_dict
 
     @auto_fp16(apply_to=('mlvl_feats', 'bev_queries', 'object_query_embed', 'prev_bev', 'bev_pos'))
     def forward(self,

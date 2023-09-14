@@ -180,7 +180,7 @@ class BEVFormerBackbone(nn.Module):
                             device=bev_queries.device).to(dtype)
         bev_pos = self.positional_encoding(bev_mask).to(dtype)
 
-        outs =  self.transformer.get_bev_features(
+        ret_dict =  self.transformer.get_bev_features(
                 mlvl_feats,
                 bev_queries,
                 self.bev_h,
@@ -192,9 +192,10 @@ class BEVFormerBackbone(nn.Module):
                 prev_bev=prev_bev,
             )
         
+        outs = ret_dict['bev']
         outs = outs.unflatten(1,(self.bev_h,self.bev_w)).permute(0,3,1,2).contiguous()
         
         if self.upsample:
             outs = self.up(outs)
-        
-        return outs
+        ret_dict['bev'] = outs
+        return ret_dict
