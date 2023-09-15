@@ -290,9 +290,6 @@ class BaseTransform(BaseModule):
         mlp_input = self.get_mlp_input(camera2ego, camera_intrinsics, post_rots, post_trans)
         x, depth = self.get_cam_feats(images, mlp_input)
         x = self.bev_pool(geom, x)
-        # import pdb;pdb.set_trace()
-        # x = x.permute(0,1,3,2).contiguous()
-        x = torch.flip(x, dims=[2])
         return x, depth
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
