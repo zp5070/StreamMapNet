@@ -28,6 +28,7 @@ class StreamMapNet(BaseMapper):
                  model_name=None, 
                  streaming_cfg=dict(),
                  pretrained=None,
+                 aux_seg=dict(),
                  **kwargs):
         super().__init__()
 
@@ -44,7 +45,26 @@ class StreamMapNet(BaseMapper):
 
         self.head = build_head(head_cfg)
         self.num_decoder_layers = self.head.transformer.decoder.num_layers
-        
+
+        # aux seg
+        self.aux_seg = aux_seg
+        if self.aux_seg['use_aux_seg']:
+            embed_dims = self.backbone.transformer.embed_dims
+            if not (self.aux_seg['bev_seg'] or self.aux_seg['pv_seg']):
+                raise ValueError('aux_seg must have bev_seg or pv_seg')
+            if self.aux_seg['bev_seg']:
+                self.seg_head = nn.Sequential(
+                    nn.Conv2d(embed_dims, embed_dims, kernel_size=3, padding=1, bias=False),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(embed_dims, aux_seg['seg_classes'], kernel_size=1, padding=0)
+                )
+            if self.aux_seg['pv_seg']:            
+                self.pv_seg_head = nn.Sequential(
+                    nn.Conv2d(embed_dims, embed_dims, kernel_size=3, padding=1, bias=False),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(embed_dims, self.aux_seg['seg_classes'], kernel_size=1, padding=0)
+                )
+
         # BEV 
         self.bev_h = bev_h
         self.bev_w = bev_w
@@ -154,6 +174,7 @@ class StreamMapNet(BaseMapper):
                       img_metas=None,
                       semantic_masks=None,
                       instance_masks=None,
+                      pv_masks=None,
                       gt_depth=None,
                       **kwargs):
         '''
@@ -201,6 +222,22 @@ class StreamMapNet(BaseMapper):
             if digit_version(TORCH_VERSION) >= digit_version('1.8'):
                 loss_depth = torch.nan_to_num(loss_depth)
             loss_dict.update(loss_depth=loss_depth)
+
+        # calculate seg loss
+        if self.aux_seg['use_aux_seg']:
+            if self.aux_seg['bev_seg']:
+                seg_bev_embed = bev_feats
+                outputs_seg = self.seg_head(seg_bev_embed)
+                loss_seg = self.head.loss_seg(outputs_seg, semantic_masks.float())
+                loss_dict['loss_seg'] = loss_seg
+            
+            if self.aux_seg['pv_seg']:
+                mlvl_feats = ret_dict['mlvl_feats']
+                bs, num_cam, _, feat_h, feat_w = mlvl_feats[-1].shape
+                outputs_pv_seg = self.pv_seg_head(mlvl_feats[-1].flatten(0,1))
+                outputs_pv_seg = outputs_pv_seg.view(bs, num_cam, -1, feat_h, feat_w)
+                loss_pv_seg = self.head.loss_seg(outputs_pv_seg, pv_masks.float())
+                loss_dict['loss_pv_seg'] = loss_pv_seg
 
         # format loss
         loss = 0

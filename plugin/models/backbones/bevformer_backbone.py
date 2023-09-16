@@ -198,4 +198,5 @@ class BEVFormerBackbone(nn.Module):
         if self.upsample:
             outs = self.up(outs)
         ret_dict['bev'] = outs
+        ret_dict['mlvl_feats'] = mlvl_feats
         return ret_dict

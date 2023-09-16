@@ -52,13 +52,13 @@ simplify = True
 # segmention task params
 aux_seg_cfg = dict(
     use_aux_seg=True,
-    bev_seg=False,
+    bev_seg=True,
     pv_seg=False,
     ins_seg=True,
     seg_classes=1,
     feat_down_sample=32,
     pv_thickness=1,
-    bev_thickness=6,
+    bev_thickness=2,
     canvas_size=(bev_w, bev_h), # (w, h)
     )
 
@@ -74,7 +74,7 @@ meta = dict(
 # model configs
 bev_embed_dims = 256
 embed_dims = 512
-num_feat_levels = 3
+num_feat_levels = 1
 norm_cfg = dict(type='BN2d')
 num_class = max(list(cat2id.values()))+1
 num_points = 20
@@ -83,9 +83,9 @@ permute = True
 # lidar configs
 file_client_args = dict(backend='disk')
 grid_config = {
-    'x': [-30.0, -30.0, 0.3], # useless
-    'y': [-15.0, -15.0, 0.3], # useless
-    'z': [-10, 10, 20],        # useless
+    # 'x': [-30.0, -30.0, 0.3], # useless
+    # 'y': [-15.0, -15.0, 0.3], # useless
+    # 'z': [-10, 10, 20],        # useless
     'depth': [1.0, 35.0, 0.5], # useful
 }
 point_cloud_range = [-15.0, -30.0,-10.0, 15.0, 30.0, 10.0]
@@ -111,7 +111,7 @@ model = dict(
             pretrained='open-mmlab://detectron2/resnet50_caffe',
             depth=50,
             num_stages=4,
-            out_indices=(1, 2, 3),
+            out_indices=(3,),
             frozen_stages=-1,
             norm_cfg=norm_cfg,
             norm_eval=True,
@@ -120,7 +120,7 @@ model = dict(
             stage_with_dcn=(False, False, True, True)),
         img_neck=dict(
             type='FPN',
-            in_channels=[512, 1024, 2048],
+            in_channels=[2048],
             out_channels=bev_embed_dims,
             start_level=0,
             add_extra_convs=True,
@@ -178,6 +178,7 @@ model = dict(
             col_num_embed=bev_w,
             ),
     ),
+    aux_seg= aux_seg_cfg,
     head_cfg=dict(
         type='MapDetectorHead',
         num_queries=num_queries,
@@ -190,7 +191,6 @@ model = dict(
         different_heads=False,
         predict_refine=False,
         sync_cls_avg_factor=True,
-        aux_seg= aux_seg_cfg,
         streaming_cfg=dict(
             streaming=True,
             batch_size=batch_size,
@@ -261,7 +261,10 @@ model = dict(
         ),
         loss_seg=dict(type='SimpleLoss', 
             pos_weight=4.0,
-            loss_weight=5.0),
+            loss_weight=1.0),
+        loss_pv_seg=dict(type='SimpleLoss', 
+                    pos_weight=1.0,
+                    loss_weight=2.0),
         assigner=dict(
             type='HungarianLinesAssigner',
                 cost=dict(
@@ -311,7 +314,7 @@ train_pipeline = [
     dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
     dict(type='PadMultiViewImages', size_divisor=32),
     dict(type='FormatBundleMap'),
-    dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks', 'gt_depth'], meta_keys=(
+    dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks', 'semantic_masks', 'gt_depth'], meta_keys=(
         'token', 'ego2img', 'sample_idx', 'ego2global_translation',
         'ego2global_rotation', 'img_shape', 'scene_name', 'lidar2img',
         'camera2ego', 'camera_intrinsics', 'img_aug_matrix', 'lidar2ego',

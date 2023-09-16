@@ -36,8 +36,8 @@ class MapDetectorHead(nn.Module):
                  loss_cls=dict(),
                  loss_reg=dict(),
                  loss_seg=dict(),
+                 loss_pv_seg=dict(),
                  assigner=dict(),
-                 aux_seg=dict(),
                 ):
         super().__init__()
         self.num_queries = num_queries
@@ -49,11 +49,11 @@ class MapDetectorHead(nn.Module):
         self.bev_pos = bev_pos
         self.num_points = num_points
         self.coord_dim = coord_dim
-        self.aux_seg =aux_seg
         
         self.sync_cls_avg_factor = sync_cls_avg_factor
         self.bg_cls_weight = bg_cls_weight
         self.loss_seg = build_loss(loss_seg)
+        self.loss_pv_seg = build_loss(loss_pv_seg)
         
         if streaming_cfg:
             self.streaming_query = streaming_cfg['streaming']
@@ -195,14 +195,6 @@ class MapDetectorHead(nn.Module):
         self.cls_branches = cls_branches
         self.reg_branches = reg_branches
         self.mask_branches = mask_branches
-
-        if self.aux_seg.get('bev_seg'):
-            self.seg_head = nn.Sequential(
-                nn.Conv2d(self.in_channels, self.in_channels, kernel_size=3, padding=1, bias=False),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(self.in_channels, self.aux_seg['seg_classes'], kernel_size=1, padding=0)
-            )
-        self.mask_size = self.aux_seg.get('canvas_size')[::-1]
 
     def up_sample(self, x, tgt_shape=(200, 100)):
         if tuple(x.shape[-2:]) == tuple(tgt_shape):
