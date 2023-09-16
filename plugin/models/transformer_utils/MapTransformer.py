@@ -290,7 +290,7 @@ class MapTransformerLayer(BaseTransformerLayer):
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=query_pos,
-                    attn_mask=attn_masks[attn_index],
+                    attn_mask=kwargs['self_attn_mask'],
                     key_padding_mask=query_key_padding_mask,
                     **kwargs)
                 attn_index += 1

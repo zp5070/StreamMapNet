@@ -19,6 +19,9 @@ class MapDetectorHead(nn.Module):
 
     def __init__(self, 
                  num_queries,
+                 num_vec_one2one=100,
+                 num_vec_one2many=0,
+                 k_one2many=0,
                  num_classes=3,
                  in_channels=128,
                  embed_dims=256,
@@ -40,7 +43,10 @@ class MapDetectorHead(nn.Module):
                  aux_seg=dict(),
                 ):
         super().__init__()
-        self.num_queries = num_queries
+        self.num_queries = num_vec_one2one + num_vec_one2many
+        self.num_vec_one2one = num_vec_one2one
+        self.num_vec_one2many = num_vec_one2many
+        self.k_one2many = k_one2many
         self.num_classes = num_classes
         self.in_channels = in_channels
         self.embed_dims = embed_dims
@@ -178,6 +184,7 @@ class MapDetectorHead(nn.Module):
         mask_branch = nn.Sequential(*mask_branch)
 
         num_layers = self.transformer.decoder.num_layers
+        self.num_layers = num_layers
         if self.different_heads:
             cls_branches = nn.ModuleList(
                 [copy.deepcopy(cls_branch) for _ in range(num_layers)])
@@ -329,7 +336,7 @@ class MapDetectorHead(nn.Module):
         else:
             return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list
 
-    def forward_train(self, bev_features, img_metas, gts):
+    def forward_train(self, bev_features, img_metas, gts, gts_one2many):
         '''
         Args:
             bev_feature (List[Tensor]): shape [B, C, H, W]
@@ -353,7 +360,7 @@ class MapDetectorHead(nn.Module):
         pos_embed = None
 
         query_embedding = self.query_embedding.weight[None, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
-        input_query_num = self.num_queries
+
         # num query: self.num_query + self.topk
         if self.streaming_query:
             query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query, is_first_frame_list, trans_loss = \
@@ -369,6 +376,12 @@ class MapDetectorHead(nn.Module):
         assert list(init_reference_points.shape) == [bs, self.num_queries, self.num_points, 2]
         assert list(query_embedding.shape) == [bs, self.num_queries, self.embed_dims]
 
+        self_attn_mask = (
+            torch.zeros([self.num_queries, self.num_queries,]).bool().to(bev_features[0].device)
+        )
+        self_attn_mask[self.num_vec_one2one :, 0 : self.num_vec_one2one,] = True
+        self_attn_mask[0 : self.num_vec_one2one, self.num_vec_one2one :,] = True
+
         # outs_dec: (num_layers, num_qs, bs, embed_dims)
         inter_queries, init_reference, inter_references = self.transformer(
             mlvl_feats=[bev_features,],
@@ -383,9 +396,11 @@ class MapDetectorHead(nn.Module):
             cls_branches=self.cls_branches,
             predict_refine=self.predict_refine,
             is_first_frame_list=is_first_frame_list,
+            self_attn_mask=self_attn_mask,
             query_key_padding_mask=query_embedding.new_zeros((bs, self.num_queries), dtype=torch.bool), # mask used in self-attn,
         )
-        outputs = []
+        outputs_one2one = []
+        outputs_one2many = []
         for i, (queries) in enumerate(inter_queries):
             reg_points = inter_references[i] # (bs, num_q, num_points, 2)
             bs = reg_points.shape[0]
@@ -396,24 +411,40 @@ class MapDetectorHead(nn.Module):
             ins_masks = torch.einsum("bqc, bchw->bqhw", mask_embeds, input_bev_features)
             # ins_masks = self.up_sample(ins_masks, self.mask_size)
 
-            reg_points_list = []
-            scores_list = []
-            ins_masks_list = []
+            reg_points_list_one2one = []
+            scores_list_one2one = []
+            ins_masks_list_one2one = []
+            reg_points_list_one2many = []
+            scores_list_one2many = []
+            ins_masks_list_one2many = []
             for i in range(len(scores)):
                 # padding queries should not be output
-                reg_points_list.append(reg_points[i])
-                scores_list.append(scores[i])
-                ins_masks_list.append(ins_masks[i])
+                reg_points_list_one2one.append(reg_points[i][0:self.num_vec_one2one])
+                scores_list_one2one.append(scores[i][0:self.num_vec_one2one])
+                ins_masks_list_one2one.append(ins_masks[i][0:self.num_vec_one2one])
+                reg_points_list_one2many.append(reg_points[i][self.num_vec_one2one:])
+                scores_list_one2many.append(scores[i][self.num_vec_one2one:])
+                ins_masks_list_one2many.append(ins_masks[i][self.num_vec_one2one:])
 
-            pred_dict = {
-                'lines': reg_points_list,
-                'scores': scores_list,
-                'masks': ins_masks_list
+            pred_one2one_dict = {
+                'lines': reg_points_list_one2one,
+                'scores': scores_list_one2one,
+                'masks': ins_masks_list_one2one
             }
-            outputs.append(pred_dict)
+            pred_one2many_dict = {
+                'lines': reg_points_list_one2many,
+                'scores': scores_list_one2many,
+                'masks': ins_masks_list_one2many
+            }
+            outputs_one2one.append(pred_one2one_dict)
+            outputs_one2many.append(pred_one2many_dict)
         
-        loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
+        # for gt in 
+        loss_dict_one2one, det_match_idxs_one2one, det_match_gt_idxs_one2one, gt_lines_list_one2one = \
+            self.loss(gts=gts, preds=outputs_one2one)
 
+        loss_dict_one2many, det_match_idxs_one2many, det_match_gt_idxs_one2many, gt_lines_list_one2many = \
+            self.loss(gts=gts_one2many, preds=outputs_one2many)
         if self.streaming_query:
             query_list = []
             ref_pts_list = []
@@ -446,7 +477,7 @@ class MapDetectorHead(nn.Module):
 
             loss_dict['trans_loss'] = trans_loss
 
-        return outputs, loss_dict, det_match_idxs, det_match_gt_idxs
+        return outputs_one2one, loss_dict, det_match_idxs_one2one, det_match_gt_idxs_one2one
     
     def forward_test(self, bev_features, img_metas):
         '''
@@ -469,7 +500,7 @@ class MapDetectorHead(nn.Module):
         # pos_embed = self.positional_encoding(img_masks)
         pos_embed = None
 
-        query_embedding = self.query_embedding.weight[None, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
+        query_embedding = self.query_embedding.weight[None, 0:self.num_vec_one2one, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
         input_query_num = self.num_queries
         # num query: self.num_query + self.topk
         if self.streaming_query:
