@@ -20,8 +20,8 @@ img_h = 480
 img_w = 800
 img_size = (img_h, img_w)
 
-num_gpus = 1
-batch_size = 2
+num_gpus = 4
+batch_size = 4
 num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
 num_epochs_single_frame = num_epochs // 6
@@ -83,9 +83,9 @@ permute = True
 # lidar configs
 file_client_args = dict(backend='disk')
 grid_config = {
-    # 'x': [-30.0, -30.0, 0.3], # useless
-    # 'y': [-15.0, -15.0, 0.3], # useless
-    # 'z': [-10, 10, 20],        # useless
+    'x': [-30.0, -30.0, 0.3], # useless
+    'y': [-15.0, -15.0, 0.3], # useless
+    'z': [-10, 10, 20],        # useless
     'depth': [1.0, 35.0, 0.5], # useful
 }
 point_cloud_range = [-15.0, -30.0,-10.0, 15.0, 30.0, 10.0]
@@ -261,7 +261,7 @@ model = dict(
         ),
         loss_seg=dict(type='SimpleLoss', 
             pos_weight=4.0,
-            loss_weight=1.0),
+            loss_weight=5.0),
         loss_pv_seg=dict(type='SimpleLoss', 
                     pos_weight=1.0,
                     loss_weight=2.0),
@@ -271,7 +271,7 @@ model = dict(
                     type='MapQueriesCost',
                     cls_cost=dict(type='FocalLossCost', weight=5.0),
                     reg_cost=dict(type='LinesL1Cost', weight=50.0, beta=0.01, permute=permute),
-                    mask_cost=dict(type='MaskCost', weight=5.0, ce_weight=1, dice_weight=1, num_points=200 * 100,
+                    mask_cost=dict(type='MaskCost', weight=5.0, ce_weight=1, dice_weight=1, num_points=25 * 50,
                            use_point_render=True, oversample_ratio=3.0, importance_sample_ratio=0.9)
                     ),
                 ),
@@ -289,6 +289,15 @@ model = dict(
 
 # data processing pipelines
 train_pipeline = [
+    dict(
+        type='VectorizeMap',
+        coords_dim=coords_dim,
+        roi_size=roi_size,
+        sample_num=num_points,
+        normalize=True,
+        permute=permute,
+        aux_seg=aux_seg_cfg
+    ),
     dict(type='LoadMultiViewImagesFromFiles', to_float32=True),
     dict(type='PhotoMetricDistortionMultiViewImage'),
     dict(type='ResizeMultiViewImages',
@@ -304,15 +313,6 @@ train_pipeline = [
         file_client_args=file_client_args),
     dict(type='CustomPointToMultiViewDepth', downsample=1, grid_config=grid_config),
     dict(type='PadMultiViewImages', size_divisor=32),
-    dict(
-        type='VectorizeMap',
-        coords_dim=coords_dim,
-        roi_size=roi_size,
-        sample_num=num_points,
-        normalize=True,
-        permute=permute,
-        aux_seg=aux_seg_cfg
-    ),
     dict(type='FormatBundleMap'),
     dict(type='Collect3D', keys=['img', 'vectors', 'instance_masks', 'semantic_masks', 'gt_depth'], meta_keys=(
         'token', 'ego2img', 'sample_idx', 'ego2global_translation',
@@ -435,10 +435,10 @@ runner = dict(
     type='IterBasedRunner', max_iters=num_epochs * num_iters_per_epoch)
 
 log_config = dict(
-    interval=1,
+    interval=100,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
     ])
 
-SyncBN = False
+SyncBN = True
