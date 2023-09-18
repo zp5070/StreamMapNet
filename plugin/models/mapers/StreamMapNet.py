@@ -45,6 +45,7 @@ class StreamMapNet(BaseMapper):
 
         self.head = build_head(head_cfg)
         self.num_decoder_layers = self.head.transformer.decoder.num_layers
+        self.k_one2many = self.head.k_one2many
 
         # aux seg
         self.aux_seg = aux_seg
@@ -194,7 +195,7 @@ class StreamMapNet(BaseMapper):
         '''
         #  prepare labels and images
 
-        gts, img, img_metas, valid_idx, points = self.batch_data(
+        gts_one2many, gts, img, img_metas, valid_idx, points = self.batch_data(
             vectors, img, img_metas, img.device, points, instance_masks)
         
         bs = img.shape[0]
@@ -213,6 +214,7 @@ class StreamMapNet(BaseMapper):
             bev_features=bev_feats, 
             img_metas=img_metas, 
             gts=gts,
+            gts_one2many=gts_one2many,
             return_loss=True)
 
         # calculate depth loss
@@ -297,6 +299,10 @@ class StreamMapNet(BaseMapper):
         all_labels_list = []
         all_lines_list = []
         all_masks_list = []
+        gts_one2many = []
+        all_labels_list_one2many = []
+        all_lines_list_one2many = []
+        all_masks_list_one2many = []
         for idx in range(bs):
             labels = []
             lines = []
@@ -320,16 +326,23 @@ class StreamMapNet(BaseMapper):
             all_labels_list.append(torch.tensor(labels, dtype=torch.long).to(device))
             all_lines_list.append(torch.stack(lines).float().to(device))
             all_masks_list.append(torch.stack(mask_lines).float().to(device))
-
+            all_labels_list_one2many.append(torch.tensor(labels * self.k_one2many, dtype=torch.long).to(device))
+            all_lines_list_one2many.append(torch.stack(lines * self.k_one2many).float().to(device))
+            all_masks_list_one2many.append(torch.stack(mask_lines * self.k_one2many).float().to(device))
         gts = {
             'labels': all_labels_list,
             'lines': all_lines_list,
             'masks': all_masks_list
         }
-
+        gts_one2many = {
+            'labels': all_labels_list_one2many,
+            'lines': all_lines_list_one2many,
+            'masks': all_masks_list_one2many
+        }
         gts = [deepcopy(gts) for _ in range(self.num_decoder_layers)]
+        gts_one2many = [deepcopy(gts_one2many) for _ in range(self.num_decoder_layers)]
 
-        return gts, imgs, img_metas, valid_idx, points
+        return gts_one2many, gts, imgs, img_metas, valid_idx, points
 
     def train(self, *args, **kwargs):
         super().train(*args, **kwargs)

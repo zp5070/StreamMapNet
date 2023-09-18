@@ -18,7 +18,10 @@ from ..utils.query_update import MotionMLP
 class MapDetectorHead(nn.Module):
 
     def __init__(self, 
-                 num_queries,
+                #  num_queries,
+                 num_vec_one2one=150,
+                 num_vec_one2many=0,
+                 k_one2many=0,
                  num_classes=3,
                  in_channels=128,
                  embed_dims=256,
@@ -32,6 +35,7 @@ class MapDetectorHead(nn.Module):
                  sync_cls_avg_factor=True,
                  bg_cls_weight=0.,
                  streaming_cfg=dict(),
+                 streaming_cfg_one2many=dict(),
                  transformer=dict(),
                  loss_cls=dict(),
                  loss_reg=dict(),
@@ -40,7 +44,10 @@ class MapDetectorHead(nn.Module):
                  assigner=dict(),
                 ):
         super().__init__()
-        self.num_queries = num_queries
+        self.num_queries = num_vec_one2one + num_vec_one2many
+        self.num_vec_one2one = num_vec_one2one
+        self.num_vec_one2many = num_vec_one2many
+        self.k_one2many = k_one2many
         self.num_classes = num_classes
         self.in_channels = in_channels
         self.embed_dims = embed_dims
@@ -73,7 +80,26 @@ class MapDetectorHead(nn.Module):
 
             self.query_update = MotionMLP(c_dim=c_dim, f_dim=self.embed_dims, identity=True)
             self.target_memory = StreamTensorMemory(self.batch_size)
-            
+
+        if streaming_cfg_one2many:
+            self.streaming_query_one2many = streaming_cfg_one2many['streaming']
+        else:
+            self.streaming_query_one2many = False
+        if self.streaming_query_one2many:
+            self.batch_size_one2many = streaming_cfg_one2many['batch_size']
+            self.topk_query_one2many = streaming_cfg_one2many['topk']
+            self.trans_loss_weight_one2many = streaming_cfg_one2many.get('trans_loss_weight', 0.0)
+            self.query_memory_one2many = StreamTensorMemory(
+                self.batch_size,
+            )
+            self.reference_points_memory_one2many = StreamTensorMemory(
+                self.batch_size,
+            )
+            c_dim = 12
+
+            self.query_update = MotionMLP(c_dim=c_dim, f_dim=self.embed_dims, identity=True)
+            self.target_memory_one2many = StreamTensorMemory(self.batch_size)
+
         self.register_buffer('roi_size', torch.tensor(roi_size, dtype=torch.float32))
         origin = (-roi_size[0]/2, -roi_size[1]/2)
         self.register_buffer('origin', torch.tensor(origin, dtype=torch.float32))
@@ -312,7 +338,7 @@ class MapDetectorHead(nn.Module):
         assert list(prop_ref_pts.shape) == [bs, self.topk_query, self.num_points, 2]
         
         init_reference_points = self.reference_points_embed(query_embedding).sigmoid() # (bs, num_q, 2*num_pts)
-        init_reference_points = init_reference_points.view(bs, self.num_queries, self.num_points, 2) # (bs, num_q, num_pts, 2)
+        init_reference_points = init_reference_points.view(bs, self.num_vec_one2one, self.num_points, 2) # (bs, num_q, num_pts, 2)
         memory_query_embedding = None
 
         if return_loss:
@@ -321,7 +347,114 @@ class MapDetectorHead(nn.Module):
         else:
             return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list
 
-    def forward_train(self, bev_features, img_metas, gts):
+    def propagate_one2many(self, query_embedding, img_metas, return_loss=True):
+        bs = query_embedding.shape[0]
+        propagated_query_list = []
+        prop_reference_points_list = []
+        
+        tmp = self.query_memory_one2many.get(img_metas)
+        query_memory, pose_memory = tmp['tensor'], tmp['img_metas']
+
+        tmp = self.reference_points_memory_one2many.get(img_metas)
+        ref_pts_memory, pose_memory = tmp['tensor'], tmp['img_metas']
+
+        if return_loss:
+            target_memory = self.target_memory_one2many.get(img_metas)['tensor']
+            trans_loss = query_embedding.new_zeros((1,))
+            num_pos = 0
+
+        is_first_frame_list = tmp['is_first_frame']
+
+        for i in range(bs):
+            is_first_frame = is_first_frame_list[i]
+            if is_first_frame:
+                padding = query_embedding.new_zeros((self.topk_query_one2many, self.embed_dims))
+                propagated_query_list.append(padding)
+
+                padding = query_embedding.new_zeros((self.topk_query_one2many, self.num_points, 2))
+                prop_reference_points_list.append(padding)
+            else:
+                # use float64 to do precise coord transformation
+                prev_e2g_trans = self.roi_size.new_tensor(pose_memory[i]['ego2global_translation'], dtype=torch.float64)
+                prev_e2g_rot = self.roi_size.new_tensor(pose_memory[i]['ego2global_rotation'], dtype=torch.float64)
+                curr_e2g_trans = self.roi_size.new_tensor(img_metas[i]['ego2global_translation'], dtype=torch.float64)
+                curr_e2g_rot = self.roi_size.new_tensor(img_metas[i]['ego2global_rotation'], dtype=torch.float64)
+                
+                prev_e2g_matrix = torch.eye(4, dtype=torch.float64).to(query_embedding.device)
+                prev_e2g_matrix[:3, :3] = prev_e2g_rot
+                prev_e2g_matrix[:3, 3] = prev_e2g_trans
+
+                curr_g2e_matrix = torch.eye(4, dtype=torch.float64).to(query_embedding.device)
+                curr_g2e_matrix[:3, :3] = curr_e2g_rot.T
+                curr_g2e_matrix[:3, 3] = -(curr_e2g_rot.T @ curr_e2g_trans)
+
+                prev2curr_matrix = curr_g2e_matrix @ prev_e2g_matrix
+                pos_encoding = prev2curr_matrix.float()[:3].view(-1)
+
+                prop_q = query_memory[i]
+                query_memory_updated = self.query_update(
+                    prop_q, # (topk, embed_dims)
+                    pos_encoding.view(1, -1).repeat(len(query_memory[i]), 1)
+                )
+                propagated_query_list.append(query_memory_updated.clone())
+
+                pred = self.reg_branches[-1](query_memory_updated).sigmoid() # (num_prop, 2*num_pts)
+                assert list(pred.shape) == [self.topk_query_one2many, 2*self.num_points]
+
+                if return_loss:
+                    targets = target_memory[i]
+
+                    weights = targets.new_ones((self.topk_query_one2many, 2*self.num_points))
+                    bg_idx = torch.all(targets.view(self.topk_query_one2many, -1) == 0.0, dim=1)
+                    num_pos = num_pos + (self.topk_query_one2many - bg_idx.sum())
+                    weights[bg_idx, :] = 0.0
+
+                    denormed_targets = targets * self.roi_size + self.origin # (topk, num_pts, 2)
+                    denormed_targets = torch.cat([
+                        denormed_targets,
+                        denormed_targets.new_zeros((self.topk_query_one2many, self.num_points, 1)), # z-axis
+                        denormed_targets.new_ones((self.topk_query_one2many, self.num_points, 1)) # 4-th dim
+                    ], dim=-1) # (num_prop, num_pts, 4)
+                    assert list(denormed_targets.shape) == [self.topk_query_one2many, self.num_points, 4]
+                    curr_targets = torch.einsum('lk,ijk->ijl', prev2curr_matrix.float(), denormed_targets)
+                    normed_targets = (curr_targets[..., :2] - self.origin) / self.roi_size # (num_prop, num_pts, 2)
+                    normed_targets = torch.clip(normed_targets, min=0., max=1.).reshape(-1, 2*self.num_points)
+                    # (num_prop, 2*num_pts)
+                    trans_loss += self.loss_reg(pred, normed_targets, weights, avg_factor=1.0)
+                
+                # ref pts
+                prev_ref_pts = ref_pts_memory[i]
+                denormed_ref_pts = prev_ref_pts * self.roi_size + self.origin # (num_prop, num_pts, 2)
+                assert list(prev_ref_pts.shape) == [self.topk_query_one2many, self.num_points, 2]
+                denormed_ref_pts = torch.cat([
+                    denormed_ref_pts,
+                    denormed_ref_pts.new_zeros((self.topk_query_one2many, self.num_points, 1)), # z-axis
+                    denormed_ref_pts.new_ones((self.topk_query_one2many, self.num_points, 1)) # 4-th dim
+                ], dim=-1) # (num_prop, num_pts, 4)
+                assert list(denormed_ref_pts.shape) == [self.topk_query_one2many, self.num_points, 4]
+
+                curr_ref_pts = torch.einsum('lk,ijk->ijl', prev2curr_matrix, denormed_ref_pts.double()).float()
+                normed_ref_pts = (curr_ref_pts[..., :2] - self.origin) / self.roi_size # (num_prop, num_pts, 2)
+                normed_ref_pts = torch.clip(normed_ref_pts, min=0., max=1.)
+
+                prop_reference_points_list.append(normed_ref_pts)
+                
+        prop_query_embedding = torch.stack(propagated_query_list) # (bs, topk, embed_dims)
+        prop_ref_pts = torch.stack(prop_reference_points_list) # (bs, topk, num_pts, 2)
+        assert list(prop_query_embedding.shape) == [bs, self.topk_query_one2many, self.embed_dims]
+        assert list(prop_ref_pts.shape) == [bs, self.topk_query_one2many, self.num_points, 2]
+        
+        init_reference_points = self.reference_points_embed(query_embedding).sigmoid() # (bs, num_q, 2*num_pts)
+        init_reference_points = init_reference_points.view(bs, self.num_vec_one2many, self.num_points, 2) # (bs, num_q, num_pts, 2)
+        memory_query_embedding = None
+
+        if return_loss:
+            trans_loss = self.trans_loss_weight * trans_loss / (num_pos + 1e-10)
+            return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list, trans_loss
+        else:
+            return query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query_embedding, is_first_frame_list
+
+    def forward_train(self, bev_features, img_metas, gts, gts_one2many):
         '''
         Args:
             bev_feature (List[Tensor]): shape [B, C, H, W]
@@ -347,19 +480,33 @@ class MapDetectorHead(nn.Module):
         query_embedding = self.query_embedding.weight[None, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
         input_query_num = self.num_queries
         # num query: self.num_query + self.topk
+        assert self.streaming_query == True and self.streaming_query_one2many == True # only support
         if self.streaming_query:
-            query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query, is_first_frame_list, trans_loss = \
-                self.propagate(query_embedding, img_metas, return_loss=True)
+            query_embedding_one2one, prop_query_embedding_one2one, init_reference_points_one2one, \
+                prop_ref_pts_one2one, memory_query, is_first_frame_list, trans_loss = \
+                self.propagate(query_embedding[:, 0:self.num_vec_one2one], img_metas, return_loss=True)
+            query_embedding_one2many, prop_query_embedding_one2many, init_reference_points_one2many, \
+                prop_ref_pts_one2many, _, _, trans_loss_one2many = \
+                self.propagate_one2many(query_embedding[:, self.num_vec_one2one:], img_metas, return_loss=True)
+            query_embedding = torch.cat([query_embedding_one2one, query_embedding_one2many], dim=1)
+            init_reference_points = torch.cat([init_reference_points_one2one, init_reference_points_one2many], dim=1)
+            prop_query_embedding = torch.cat([prop_query_embedding_one2one, prop_query_embedding_one2many], dim=1)
+            prop_ref_pts = torch.cat([prop_ref_pts_one2one, prop_ref_pts_one2many], dim=1)
+        # else:
+        #     init_reference_points = self.reference_points_embed(query_embedding).sigmoid() # (bs, num_q, 2*num_pts)
+        #     init_reference_points = init_reference_points.view(-1, self.num_queries, self.num_points, 2) # (bs, num_q, num_pts, 2)
+        #     prop_query_embedding = None
+        #     prop_ref_pts = None
+        #     is_first_frame_list = [True for i in range(bs)]
 
-        else:
-            init_reference_points = self.reference_points_embed(query_embedding).sigmoid() # (bs, num_q, 2*num_pts)
-            init_reference_points = init_reference_points.view(-1, self.num_queries, self.num_points, 2) # (bs, num_q, num_pts, 2)
-            prop_query_embedding = None
-            prop_ref_pts = None
-            is_first_frame_list = [True for i in range(bs)]
+        # assert list(init_reference_points.shape) == [bs, self.num_queries, self.num_points, 2]
+        # assert list(query_embedding.shape) == [bs, self.num_queries, self.embed_dims]
 
-        assert list(init_reference_points.shape) == [bs, self.num_queries, self.num_points, 2]
-        assert list(query_embedding.shape) == [bs, self.num_queries, self.embed_dims]
+        self_attn_mask = (
+            torch.zeros([input_query_num, input_query_num,]).bool().to(bev_features[0].device)
+        )
+        self_attn_mask[self.num_vec_one2one :, 0 : self.num_vec_one2one,] = True
+        self_attn_mask[0 : self.num_vec_one2one, self.num_vec_one2one :,] = True
 
         # outs_dec: (num_layers, num_qs, bs, embed_dims)
         inter_queries, init_reference, inter_references = self.transformer(
@@ -373,11 +520,16 @@ class MapDetectorHead(nn.Module):
             prop_reference_points=prop_ref_pts,
             reg_branches=self.reg_branches,
             cls_branches=self.cls_branches,
+            self_attn_mask=self_attn_mask,
+            has_one2many=True,
+            num_vec_one2one=self.num_vec_one2one,
+            topk_query_one2one=self.topk_query,
             predict_refine=self.predict_refine,
             is_first_frame_list=is_first_frame_list,
             query_key_padding_mask=query_embedding.new_zeros((bs, self.num_queries), dtype=torch.bool), # mask used in self-attn,
         )
         outputs = []
+        outputs_one2many = []
         for i, (queries) in enumerate(inter_queries):
             reg_points = inter_references[i] # (bs, num_q, num_points, 2)
             bs = reg_points.shape[0]
@@ -391,21 +543,30 @@ class MapDetectorHead(nn.Module):
             reg_points_list = []
             scores_list = []
             ins_masks_list = []
+            reg_points_list_one2many = []
+            scores_list_one2many = []
+            ins_masks_list_one2many = []
             for i in range(len(scores)):
                 # padding queries should not be output
-                reg_points_list.append(reg_points[i])
-                scores_list.append(scores[i])
-                ins_masks_list.append(ins_masks[i])
-
+                reg_points_list.append(reg_points[i][0:self.num_vec_one2one])
+                scores_list.append(scores[i][0:self.num_vec_one2one])
+                ins_masks_list.append(ins_masks[i][0:self.num_vec_one2one])
+                reg_points_list_one2many.append(reg_points[i][self.num_vec_one2one:])
+                scores_list_one2many.append(scores[i][self.num_vec_one2one:])
+                ins_masks_list_one2many.append(ins_masks[i][self.num_vec_one2one:])
             pred_dict = {
                 'lines': reg_points_list,
                 'scores': scores_list,
                 'masks': ins_masks_list
             }
+            pred_dict_one2many = {
+                'lines': reg_points_list_one2many,
+                'scores': scores_list_one2many,
+                'masks': ins_masks_list_one2many
+            }
             outputs.append(pred_dict)
-        
+            outputs_one2many.append(pred_dict_one2many)
         loss_dict, det_match_idxs, det_match_gt_idxs, gt_lines_list = self.loss(gts=gts, preds=outputs)
-
         if self.streaming_query:
             query_list = []
             ref_pts_list = []
@@ -415,7 +576,7 @@ class MapDetectorHead(nn.Module):
 
             for i in range(bs):
                 _lines = lines[i]
-                _queries = inter_queries[-1][i]
+                _queries = inter_queries[-1][i][0:self.num_vec_one2one]
                 _scores = scores[i]
                 _gt_targets = gt_lines[i] # (num_q or num_q+topk, 20, 2)
                 assert len(_lines) == len(_queries)
@@ -427,7 +588,7 @@ class MapDetectorHead(nn.Module):
                 _queries = _queries[topk_idx] # (topk, embed_dims)
                 _lines = _lines[topk_idx] # (topk, 2*num_pts)
                 _gt_targets = _gt_targets[topk_idx] # (topk, 20, 2)
-                
+
                 query_list.append(_queries)
                 ref_pts_list.append(_lines.view(-1, self.num_points, 2))
                 gt_targets_list.append(_gt_targets.view(-1, self.num_points, 2))
@@ -435,9 +596,43 @@ class MapDetectorHead(nn.Module):
             self.query_memory.update(query_list, img_metas)
             self.reference_points_memory.update(ref_pts_list, img_metas)
             self.target_memory.update(gt_targets_list, img_metas)
-
             loss_dict['trans_loss'] = trans_loss
 
+        loss_dict_one2many, det_match_idxs_one2many, det_match_gt_idxs_one2many, gt_lines_list_one2many = self.loss(gts=gts_one2many, preds=outputs_one2many)
+        if self.streaming_query_one2many:
+            query_list_one2many = []
+            ref_pts_list_one2many = []
+            gt_targets_list_one2many = []
+            lines, scores = outputs_one2many[-1]['lines'], outputs_one2many[-1]['scores']
+            gt_lines = gt_lines_list_one2many[-1] # take results from the last layer
+
+            for i in range(bs):
+                _lines = lines[i]
+                _queries = inter_queries[-1][i][self.num_vec_one2one:]
+                _scores = scores[i]
+                _gt_targets = gt_lines[i] # (num_q or num_q+topk, 20, 2)
+                assert len(_lines) == len(_queries)
+                assert len(_lines) == len(_gt_targets)
+
+                _scores, _ = _scores.max(-1)
+                topk_score, topk_idx = _scores.topk(k=self.topk_query_one2many, dim=-1)
+
+                _queries = _queries[topk_idx] # (topk, embed_dims)
+                _lines = _lines[topk_idx] # (topk, 2*num_pts)
+                _gt_targets = _gt_targets[topk_idx] # (topk, 20, 2)
+
+                query_list_one2many.append(_queries)
+                ref_pts_list_one2many.append(_lines.view(-1, self.num_points, 2))
+                gt_targets_list_one2many.append(_gt_targets.view(-1, self.num_points, 2))
+
+            self.query_memory_one2many.update(query_list_one2many, img_metas)
+            self.reference_points_memory_one2many.update(ref_pts_list_one2many, img_metas)
+            self.target_memory_one2many.update(gt_targets_list_one2many, img_metas)
+
+            loss_dict['trans_loss_one2many'] = trans_loss
+
+        for key, value in loss_dict_one2many.items():
+            loss_dict[f'{key}_one2many'] = value
         return outputs, loss_dict, det_match_idxs, det_match_gt_idxs
     
     def forward_test(self, bev_features, img_metas):
@@ -461,8 +656,8 @@ class MapDetectorHead(nn.Module):
         # pos_embed = self.positional_encoding(img_masks)
         pos_embed = None
 
-        query_embedding = self.query_embedding.weight[None, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
-        input_query_num = self.num_queries
+        input_query_num = self.num_vec_one2one
+        query_embedding = self.query_embedding.weight[None, 0:self.num_vec_one2one, ...].repeat(bs, 1, 1) # [B, num_q, embed_dims]
         # num query: self.num_query + self.topk
         if self.streaming_query:
             query_embedding, prop_query_embedding, init_reference_points, prop_ref_pts, memory_query, is_first_frame_list = \
@@ -478,6 +673,12 @@ class MapDetectorHead(nn.Module):
         assert list(init_reference_points.shape) == [bs, input_query_num, self.num_points, 2]
         assert list(query_embedding.shape) == [bs, input_query_num, self.embed_dims]
 
+        self_attn_mask = (
+            torch.zeros([input_query_num, input_query_num,]).bool().to(bev_features[0].device)
+        )
+        self_attn_mask[self.num_vec_one2one :, 0 : self.num_vec_one2one,] = True
+        self_attn_mask[0 : self.num_vec_one2one, self.num_vec_one2one :,] = True
+
         # outs_dec: (num_layers, num_qs, bs, embed_dims)
         inter_queries, init_reference, inter_references = self.transformer(
             mlvl_feats=[bev_features,],
@@ -490,6 +691,7 @@ class MapDetectorHead(nn.Module):
             prop_reference_points=prop_ref_pts,
             reg_branches=self.reg_branches,
             cls_branches=self.cls_branches,
+            self_attn_mask=self_attn_mask,
             predict_refine=self.predict_refine,
             is_first_frame_list=is_first_frame_list,
             query_key_padding_mask=query_embedding.new_zeros((bs, self.num_queries), dtype=torch.bool), # mask used in self-attn,

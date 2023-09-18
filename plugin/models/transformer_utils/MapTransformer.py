@@ -97,19 +97,40 @@ class MapTransformerDecoder_new(BaseModule):
             if lid == self.prop_add_stage and prop_query is not None and prop_reference_points is not None:
                 bs, topk, embed_dims = prop_query.shape
                 output = output.permute(1, 0, 2)
+
                 with torch.no_grad():
                     tmp_scores, _ = cls_branches[lid](output).max(-1) # (bs, num_q)
+                if kwargs.get('num_vec_one2one', None) is not None:
+                    num_vec_one2one = kwargs['num_vec_one2one']
+                    num_vec_one2many = num_queries - num_vec_one2one
+                    topk_query_one2one = kwargs['topk_query_one2one']
+                    topk_query_one2many = topk - topk_query_one2one
+                    output_one2one, output_one2many = torch.split(output, [num_vec_one2one, num_vec_one2many], dim=1)
+                    prop_query_one2one, prop_query_one2many = torch.split(prop_query, [topk_query_one2one, topk_query_one2many], dim=1)
+                    prop_reference_points_one2one, prop_reference_points_one2many = torch.split(prop_reference_points, [topk_query_one2one, topk_query_one2many], dim=1)
+                    tmp_scores_one2one, tmp_scores_one2many = torch.split(tmp_scores, [num_vec_one2one, num_vec_one2many], dim=1)
                 new_query = []
                 new_refpts = []
+
                 for i in range(bs):
                     if is_first_frame_list[i]:
                         new_query.append(output[i])
                         new_refpts.append(reference_points[i])
                     else:
-                        _, valid_idx = torch.topk(tmp_scores[i], k=num_queries-topk, dim=-1)
-                        new_query.append(torch.cat([prop_query[i], output[i][valid_idx]], dim=0))
-                        new_refpts.append(torch.cat([prop_reference_points[i], reference_points[i][valid_idx]], dim=0))
-                
+                        if kwargs.get('num_vec_one2one', None) is not None:
+                            _, valid_idx_one2one = torch.topk(tmp_scores_one2one[i], k=num_vec_one2one-topk_query_one2one, dim=-1)
+                            new_query_one2one = torch.cat([prop_query_one2one[i], output_one2one[i][valid_idx_one2one]], dim=0)
+                            new_refpts_one2one = torch.cat([prop_reference_points_one2one[i], reference_points[i][valid_idx_one2one]], dim=0)
+                            _, valid_idx_one2many = torch.topk(tmp_scores_one2many[i], k=num_vec_one2many-topk_query_one2many, dim=-1)
+                            new_query_one2many = torch.cat([prop_query_one2many[i], output_one2many[i][valid_idx_one2many]], dim=0)
+                            new_refpts_one2many = torch.cat([prop_reference_points_one2many[i], reference_points[i][valid_idx_one2many]], dim=0)
+                            new_query.append(torch.cat([new_query_one2one, new_query_one2many], dim=0))
+                            new_refpts.append(torch.cat([new_refpts_one2one, new_refpts_one2many], dim=0))
+                        else:
+                            _, valid_idx = torch.topk(tmp_scores[i], k=num_queries-topk, dim=-1)
+                            new_query.append(torch.cat([prop_query[i], output[i][valid_idx]], dim=0))
+                            new_refpts.append(torch.cat([prop_reference_points[i], reference_points[i][valid_idx]], dim=0))
+
                 output = torch.stack(new_query).permute(1, 0, 2)
                 reference_points = torch.stack(new_refpts)
                 assert list(output.shape) == [num_queries, bs, embed_dims]
@@ -290,7 +311,7 @@ class MapTransformerLayer(BaseTransformerLayer):
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=query_pos,
-                    attn_mask=attn_masks[attn_index],
+                    attn_mask=kwargs['self_attn_mask'],
                     key_padding_mask=query_key_padding_mask,
                     **kwargs)
                 attn_index += 1
