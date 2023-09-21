@@ -23,13 +23,14 @@ num_iters_per_epoch = 27846 // (num_gpus * batch_size)
 num_epochs = 24
 num_epochs_single_frame = num_epochs // 6
 total_iters = num_epochs * num_iters_per_epoch
-num_queries = 100
+num_queries = 150
 
 # category configs
 cat2id = {
     'ped_crossing': 0,
     'divider': 1,
     'boundary': 2,
+    'centerline': 3
 }
 num_class = max(list(cat2id.values())) + 1
 
@@ -328,7 +329,7 @@ data = dict(
     test=dict(
         type='NuscDataset',
         data_root='./datasets/nuScenes',
-        ann_file='./datasets/nuScenes/nuscenes_map_infos_val_newsplit.pkl',
+        ann_file='./datasets/streammapnet/nuscenes_map_infos_val_newsplit.pkl',
         meta=meta,
         roi_size=roi_size,
         cat2id=cat2id,
